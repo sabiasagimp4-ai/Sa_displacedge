@@ -392,8 +392,9 @@ def render(src: np.ndarray, p: Params, output_mode: str = "composite") -> np.nda
         ], axis=-1)
         return np.clip(vis, 0, 1)
 
-    if p.strength == 0.0 and p.iridescence == 0.0:
-        return src.copy()
+    # The composite no longer needs these full-frame intermediates. Drop
+    # them before spectral gathers allocate their temporary RGB buffers.
+    del coord, curl_len, curl_norm, flow, flow_len, gx_b, gy_b, inv_mag, luma
 
     # Sweep dispersion_steps taps from scale (1-dispersion) to (1+dispersion)
     # along the displacement vector, each weighted by an approximate
