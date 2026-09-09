@@ -29,6 +29,7 @@ internal sealed class FlowDisplaceEffect(IGraphicsDevicesAndContext devices)
     public float Contrast { set => SetValue(11, value); }
     public float OutputMode { set => SetValue(12, value); }
     public float DispersionSteps { set => SetValue(13, value); }
+    public float PhaseOffset { set => SetValue(14, value); }
 
     [CustomEffect(2)]
     private sealed class Impl : D2D1CustomShaderEffectImplBase<Impl>
@@ -61,6 +62,10 @@ internal sealed class FlowDisplaceEffect(IGraphicsDevicesAndContext devices)
         [CustomEffectProperty(PropertyType.Float, 11)] public float Contrast { get => _constants.Contrast; set { _constants.Contrast = Math.Clamp(value, .1f, 4f); UpdateConstants(); } }
         [CustomEffectProperty(PropertyType.Float, 12)] public float OutputMode { get => _constants.OutputMode; set { _constants.OutputMode = Math.Clamp(MathF.Round(value), 0f, 2f); UpdateConstants(); } }
         [CustomEffectProperty(PropertyType.Float, 13)] public float DispersionSteps { get => _constants.DispersionSteps; set { _constants.DispersionSteps = Math.Clamp(MathF.Round(value), 3f, 128f); UpdateConstants(); } }
+        // Not rounded, like Seed: a continuous frame-equivalent offset, so
+        // keyframing it animates the swirl's starting point smoothly
+        // instead of stepping in whole-frame jumps.
+        [CustomEffectProperty(PropertyType.Float, 14)] public float PhaseOffset { get => _constants.PhaseOffset; set { _constants.PhaseOffset = value; UpdateConstants(); } }
 
         public Impl() : base(ShaderResourceLoader.Get("FlowDisplace")) { }
 
@@ -94,7 +99,7 @@ internal sealed class FlowDisplaceEffect(IGraphicsDevicesAndContext devices)
             public float Strength, Turbulence, TurbulenceDetail, NoiseScale;
             public float FlowSpeed, Time, Dispersion, Iridescence;
             public float LightAngle, Seed, Threshold, Contrast;
-            public float OutputMode, DispersionSteps, Padding1, Padding2;
+            public float OutputMode, DispersionSteps, PhaseOffset, Padding2;
             public float Left, Top, Right, Bottom;
         }
     }

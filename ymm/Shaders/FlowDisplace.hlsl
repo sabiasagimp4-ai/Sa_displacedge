@@ -25,7 +25,7 @@ float threshold;
 float contrast;
 float outputMode;
 float dispersionSteps;
-float padding1;
+float phaseOffset;
 float padding2;
 float4 inputBounds;
 
@@ -51,8 +51,14 @@ D2D_PS_ENTRY(main)
     float invMag = magnitude > 1e-5 ? 1.0 / magnitude : 0;
     float2 edgeNormal = gradient * invMag;
 
+    // phaseOffset is added in the same frame-equivalent units as time,
+    // *before* the .015/.05 rate scaling below, so it shifts the swirl's
+    // starting point by a fixed amount regardless of flowSpeed -- unlike
+    // seed (a spatial coordinate offset, a different pattern entirely),
+    // this only moves *where in its cycle* the same pattern currently is.
+    float animTime = time * flowSpeed + phaseOffset;
     float2 coord = p / max(1.0, noiseScale) + seed * 17.0;
-    coord.x += time * flowSpeed * .015;
+    coord.x += animTime * .015;
     int octaves = (int) clamp(round(turbulenceDetail), 1, 6);
     float2 curl = CurlNoise(coord, octaves);
     float curlLen = length(curl);
@@ -96,7 +102,7 @@ D2D_PS_ENTRY(main)
     float2 lightDir = float2(cos(radians(lightAngle)), sin(radians(lightAngle)));
     float ndotl = saturate(dot(edgeNormal, lightDir) * .5 + .5);
     float spec = pow(ndotl, 8);
-    float phase = magnitude * 10 + time * flowSpeed * .05 + curl.x * .6;
+    float phase = magnitude * 10 + animTime * .05 + curl.x * .6;
     float3 glint = IridescentPalette(phase) * (spec * mask * saturate(iridescence));
 
     float3 result = saturate(rgb + glint);

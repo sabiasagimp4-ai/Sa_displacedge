@@ -170,5 +170,31 @@ class RenderContract(unittest.TestCase):
         np.testing.assert_allclose(out_64, out_128, atol=0.01)
 
 
+class PhaseOffset(unittest.TestCase):
+    def test_equivalent_to_advancing_time(self):
+        # anim_time = time*flow_speed + phase_offset is the only place
+        # time/phase_offset reach the render, so (time=T, phase=0) and
+        # (time=0, phase=T) at flow_speed=1 must be pixel-identical.
+        rng = np.random.default_rng(20)
+        src = rng.random((20, 20, 3))
+        out_via_time = preview.render(src, preview.Params(flow_speed=1.0, time=7.0, phase_offset=0.0))
+        out_via_phase = preview.render(src, preview.Params(flow_speed=1.0, time=0.0, phase_offset=7.0))
+        np.testing.assert_allclose(out_via_time, out_via_phase, atol=1e-9)
+
+    def test_zero_offset_matches_default_time_only_behaviour(self):
+        rng = np.random.default_rng(21)
+        src = rng.random((20, 20, 3))
+        baseline = preview.render(src, preview.Params(phase_offset=0.0))
+        explicit_zero = preview.render(src, preview.Params(phase_offset=0.0))
+        np.testing.assert_array_equal(baseline, explicit_zero)
+
+    def test_nonzero_offset_changes_the_render(self):
+        rng = np.random.default_rng(22)
+        src = rng.random((20, 20, 3))
+        out_a = preview.render(src, preview.Params(phase_offset=0.0))
+        out_b = preview.render(src, preview.Params(phase_offset=250.0))
+        self.assertFalse(np.allclose(out_a, out_b))
+
+
 if __name__ == "__main__":
     unittest.main()

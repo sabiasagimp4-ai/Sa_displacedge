@@ -68,7 +68,11 @@ public sealed class SaDisplacedgeEffect : VideoEffectBase
     [AnimationSlider("F0", "", 0, 999)]
     public Animation Seed { get; } = new(0, 0, 999);
 
-    [Display(Name = "出力", Description = "変位フィールドの向きや強さマスクを直接確認できます", Order = 14)]
+    [Display(Name = "位相", Description = "渦アニメーションの開始位置をずらします。流速とは独立で、タイムラインを動かさずに模様を変えられます", Order = 14)]
+    [AnimationSlider("F0", "", -1000, 1000)]
+    public Animation Phase { get; } = new(0, -1000, 1000);
+
+    [Display(Name = "出力", Description = "変位フィールドの向きや強さマスクを直接確認できます", Order = 15)]
     [EnumComboBox]
     public SaDisplacedgeOutputMode OutputMode { get => _outputMode; set => Set(ref _outputMode, value); }
     private SaDisplacedgeOutputMode _outputMode = SaDisplacedgeOutputMode.Composite;
@@ -80,7 +84,7 @@ public sealed class SaDisplacedgeEffect : VideoEffectBase
     protected override IEnumerable<IAnimatable> GetAnimatables() =>
     [
         DetectionScale, Threshold, Contrast, Radius, Strength, Turbulence, TurbulenceDetail,
-        SwirlSize, FlowSpeed, Dispersion, DispersionSteps, Iridescence, LightAngle, Seed,
+        SwirlSize, FlowSpeed, Dispersion, DispersionSteps, Iridescence, LightAngle, Seed, Phase,
     ];
 }
 

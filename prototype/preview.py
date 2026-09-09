@@ -13,9 +13,10 @@ Pipeline (matches ymm/Shaders/EdgeGradient.hlsl + FlowDisplace.hlsl):
      approximates a Gaussian spread of the *raw* gradient field, so nearby
      opposing edges partially cancel instead of doubling a binary mask.
   3. Threshold + contrast gamma on the blurred magnitude gives a soft mask.
-  4. A divergence-free curl-noise field (rotated-octave value-noise fBm) is
-     blended with the local edge normal by "turbulence" to get a flow
-     direction; scaled by strength * mask gives the displacement vector.
+  4. A divergence-free curl-noise field (rotated-octave value-noise fBm),
+     evaluated at time*flow_speed + phase_offset, is blended with the local
+     edge normal by "turbulence" to get a flow direction; scaled by
+     strength * mask gives the displacement vector.
   5. The source is swept dispersion_steps times per pixel along that vector
      (scale ranging over 1 +/- dispersion), each tap weighted by an
      approximate spectral response, for a prism-like fringe; steps=3
@@ -211,6 +212,7 @@ class Params:
     light_angle_deg: float = 55.0
     seed: float = 0.0
     time: float = 0.6                 # seconds; still-frame phase for the preview
+    phase_offset: float = 0.0         # same units as time*flow_speed; shifts the swirl's start point
 
 
 def render(src: np.ndarray, p: Params, output_mode: str = "composite") -> np.ndarray:
@@ -234,10 +236,16 @@ def render(src: np.ndarray, p: Params, output_mode: str = "composite") -> np.nda
     inv_mag = np.where(mag_b > 1e-6, 1.0 / mag_b, 0.0)
     edge_normal = np.stack([gx_b * inv_mag, gy_b * inv_mag], axis=-1)
 
+    # phase_offset is added in the same units as time*flow_speed, *before*
+    # the 0.35/1.3 rate scaling below, so it shifts the swirl's starting
+    # point by a fixed amount regardless of flow_speed -- unlike seed (a
+    # spatial coordinate offset, a different pattern entirely), this only
+    # moves *where in its cycle* the same pattern currently is.
+    anim_time = p.time * p.flow_speed + p.phase_offset
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float64)
     coord = np.stack([xx, yy], axis=-1) / p.noise_scale
     coord = coord + p.seed * 17.0
-    coord[..., 0] += p.time * p.flow_speed * 0.35
+    coord[..., 0] += anim_time * 0.35
     curl = curl_noise(coord, p.turbulence_detail)
     curl_norm = curl / np.maximum(1e-6, np.hypot(curl[..., 0], curl[..., 1]))[..., None]
 
@@ -281,7 +289,7 @@ def render(src: np.ndarray, p: Params, output_mode: str = "composite") -> np.nda
     ndotl = edge_normal[..., 0] * light[0] + edge_normal[..., 1] * light[1]
     spec = np.clip(ndotl * 0.5 + 0.5, 0, 1) ** 8
 
-    phase = mag_b * 10.0 + p.time * p.flow_speed * 1.3 + curl[..., 0] * 0.6
+    phase = mag_b * 10.0 + anim_time * 1.3 + curl[..., 0] * 0.6
     glint = iridescent_palette(phase) * (spec * mask * p.iridescence)[..., None]
 
     out = np.clip(out + glint, 0.0, 1.0)
@@ -312,6 +320,7 @@ def main() -> None:
     ap.add_argument("--iridescence", type=float, default=Params.iridescence)
     ap.add_argument("--seed", type=float, default=Params.seed)
     ap.add_argument("--time", type=float, default=Params.time)
+    ap.add_argument("--phase-offset", type=float, default=Params.phase_offset)
     args = ap.parse_args()
 
     src = load_image(args.input)
@@ -319,6 +328,7 @@ def main() -> None:
         strength=args.strength, turbulence=args.turbulence, radius=args.radius,
         dispersion=args.dispersion, dispersion_steps=args.dispersion_steps,
         iridescence=args.iridescence, seed=args.seed, time=args.time,
+        phase_offset=args.phase_offset,
     )
     out = render(src, params, output_mode=args.mode)
     save_image(out, args.output)

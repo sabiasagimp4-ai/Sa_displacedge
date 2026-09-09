@@ -14,7 +14,7 @@ foreach ($name in @('EdgeGradient', 'FlowDisplace')) {
                 @('strength', 0), @('turbulence', 4), @('turbulenceDetail', 8), @('noiseScale', 12),
                 @('flowSpeed', 16), @('time', 20), @('dispersion', 24), @('iridescence', 28),
                 @('lightAngle', 32), @('seed', 36), @('threshold', 40), @('contrast', 44),
-                @('outputMode', 48), @('dispersionSteps', 52), @('inputBounds', 64)
+                @('outputMode', 48), @('dispersionSteps', 52), @('phaseOffset', 56), @('inputBounds', 64)
             )
         }
     }
