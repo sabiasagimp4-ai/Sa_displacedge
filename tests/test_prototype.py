@@ -113,14 +113,31 @@ class IridescentPalette(unittest.TestCase):
         self.assertFalse(np.allclose(colours[1], colours[2]))
 
 
+class SpectrumWeight(unittest.TestCase):
+    def test_weights_are_in_unit_range(self):
+        for t in np.linspace(0, 1, 21):
+            w = preview.spectrum_weight(t)
+            self.assertTrue(np.all(w >= 0.0))
+            self.assertTrue(np.all(w <= 1.0 + 1e-9))
+
+    def test_channel_peaks_follow_sweep_position(self):
+        # Red should dominate at the outer end (t=1), blue at the inner end
+        # (t=0), green in the middle -- matching the original R/(1+d),
+        # G/1, B/(1-d) tap ordering when steps == 3.
+        red, green, blue = preview.spectrum_weight(1.0), preview.spectrum_weight(0.5), preview.spectrum_weight(0.0)
+        self.assertEqual(np.argmax(red), 0)
+        self.assertEqual(np.argmax(green), 1)
+        self.assertEqual(np.argmax(blue), 2)
+
+
 class RenderContract(unittest.TestCase):
     def test_zero_strength_is_close_to_source_rgb(self):
         rng = np.random.default_rng(11)
         src = rng.random((24, 24, 3))
         params = preview.Params(strength=0.0, iridescence=0.0)
         out = preview.render(src, params)
-        # No displacement and no glint: only the (disabled) dispersion spread
-        # and mask-gated glint remain, both zero here, so output ~= source.
+        # No displacement and no glint: every dispersion tap samples the same
+        # position regardless of dispersion_steps, so output ~= source.
         np.testing.assert_allclose(out, src, atol=1e-6)
 
     def test_output_modes_are_finite_and_bounded(self):
@@ -132,6 +149,25 @@ class RenderContract(unittest.TestCase):
             self.assertTrue(np.all(np.isfinite(out)))
             self.assertGreaterEqual(out.min(), -1e-6)
             self.assertLessEqual(out.max(), 1.0 + 1e-6)
+
+    def test_dispersion_steps_is_finite_and_bounded_across_range(self):
+        rng = np.random.default_rng(13)
+        src = rng.random((20, 20, 3))
+        for steps in (3, 8, 32, 128):
+            out = preview.render(src, preview.Params(dispersion_steps=steps))
+            self.assertTrue(np.all(np.isfinite(out)))
+            self.assertGreaterEqual(out.min(), -1e-6)
+            self.assertLessEqual(out.max(), 1.0 + 1e-6)
+
+    def test_more_steps_converges_to_a_stable_result(self):
+        # As dispersion_steps grows the tap sweep is a finer quadrature of
+        # the same continuous spectral sweep, so raising it further should
+        # have rapidly diminishing effect on the result.
+        rng = np.random.default_rng(14)
+        src = rng.random((20, 20, 3))
+        out_64 = preview.render(src, preview.Params(dispersion_steps=64))
+        out_128 = preview.render(src, preview.Params(dispersion_steps=128))
+        np.testing.assert_allclose(out_64, out_128, atol=0.01)
 
 
 if __name__ == "__main__":

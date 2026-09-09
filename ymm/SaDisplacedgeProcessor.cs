@@ -91,6 +91,7 @@ internal sealed class SaDisplacedgeProcessor : IVideoEffectProcessor
         _flow.FlowSpeed = (float)(_item.FlowSpeed.GetValue(frame, length, fps) / 100.0);
         _flow.Time = (float)frame;
         _flow.Dispersion = (float)(_item.Dispersion.GetValue(frame, length, fps) / 100.0);
+        _flow.DispersionSteps = (float)_item.DispersionSteps.GetValue(frame, length, fps);
         _flow.Iridescence = (float)(_item.Iridescence.GetValue(frame, length, fps) / 100.0);
         _flow.LightAngle = (float)_item.LightAngle.GetValue(frame, length, fps);
         _flow.Seed = (float)_item.Seed.GetValue(frame, length, fps);

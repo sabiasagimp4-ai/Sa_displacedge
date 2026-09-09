@@ -79,3 +79,27 @@ Console.WriteLine("PASS: CurlNoise divergence-free at matching step (200 samples
         throw new Exception($"TurbulenceDetail has little effect: only {differing}/{total} samples differ");
 }
 Console.WriteLine("PASS: turbulence detail (octave count) changes the field");
+
+// SpectrumWeight: bounded to [0,1], and peaks at the sweep position that
+// matches the classic R (outer, t=1) / G (middle, t=0.5) / B (inner, t=0)
+// tap ordering used when DispersionSteps == 3.
+for (int i = 0; i <= 20; i++)
+{
+    double t = i / 20.0;
+    var (r, g, b) = ReferenceMath.SpectrumWeight(t);
+    foreach (double w in new[] { r, g, b })
+        if (w < -1e-9 || w > 1 + 1e-9)
+            throw new Exception($"SpectrumWeight out of range at t={t}: {w}");
+}
+{
+    var atOuter = ReferenceMath.SpectrumWeight(1.0);
+    var atMiddle = ReferenceMath.SpectrumWeight(0.5);
+    var atInner = ReferenceMath.SpectrumWeight(0.0);
+    if (!(atOuter.R >= atOuter.G && atOuter.R >= atOuter.B))
+        throw new Exception("Red should peak at the outer sweep position (t=1)");
+    if (!(atMiddle.G >= atMiddle.R && atMiddle.G >= atMiddle.B))
+        throw new Exception("Green should peak at the middle sweep position (t=0.5)");
+    if (!(atInner.B >= atInner.R && atInner.B >= atInner.G))
+        throw new Exception("Blue should peak at the inner sweep position (t=0)");
+}
+Console.WriteLine("PASS: SpectrumWeight range and R/G/B peak ordering");

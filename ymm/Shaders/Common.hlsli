@@ -83,3 +83,21 @@ float3 IridescentPalette(float t)
 {
     return .5 + .5 * cos(6.2831853 * (t + float3(0, .33, .67)));
 }
+
+float Gauss(float x, float center, float sigma)
+{
+    float d = (x - center) / sigma;
+    return exp(-.5 * d * d);
+}
+
+// Approximate per-channel spectral response for a dispersion tap at sweep
+// position t in [0, 1] (0 = innermost sample, 1 = outermost). Three
+// overlapping bumps keep the middle of the sweep close to white while the
+// extremes read as colour, like a real lens' chromatic fringing rather than
+// a hard three-tap RGB split. Used by FlowDisplace.hlsl to blend an
+// arbitrary number of dispersion taps into a smooth spectral gradient
+// instead of a fixed R/G/B triple.
+float3 SpectrumWeight(float t)
+{
+    return float3(Gauss(t, .85, .35), Gauss(t, .5, .35), Gauss(t, .15, .35));
+}

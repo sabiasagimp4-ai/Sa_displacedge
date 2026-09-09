@@ -16,8 +16,10 @@ Pipeline (matches ymm/Shaders/EdgeGradient.hlsl + FlowDisplace.hlsl):
   4. A divergence-free curl-noise field (rotated-octave value-noise fBm) is
      blended with the local edge normal by "turbulence" to get a flow
      direction; scaled by strength * mask gives the displacement vector.
-  5. The source is sampled three times per pixel along that vector with a
-     per-channel scale spread (dispersion) for a prism-like fringe.
+  5. The source is swept dispersion_steps times per pixel along that vector
+     (scale ranging over 1 +/- dispersion), each tap weighted by an
+     approximate spectral response, for a prism-like fringe; steps=3
+     reduces to a classic R/G/B split, more steps give a smoother spectrum.
   6. An animated rim glint, colourised through a cosine palette (thin-film
      iridescence), is added along the flow crest.
 """
@@ -174,6 +176,20 @@ def iridescent_palette(t: np.ndarray) -> np.ndarray:
     return 0.5 + 0.5 * np.cos(2 * math.pi * (freq * t[..., None] + phase))
 
 
+def _gauss(x: float, center: float, sigma: float) -> float:
+    d = (x - center) / sigma
+    return math.exp(-0.5 * d * d)
+
+
+def spectrum_weight(t: float) -> np.ndarray:
+    """Approximate per-channel spectral response for a dispersion sweep
+    position t in [0, 1] (0 = innermost sample, 1 = outermost). Three
+    overlapping Gaussian bumps keep the middle of the sweep close to white
+    while the extremes read as colour, like real lens chromatic fringing
+    rather than a hard three-tap RGB split."""
+    return np.array([_gauss(t, 0.85, 0.35), _gauss(t, 0.5, 0.35), _gauss(t, 0.15, 0.35)])
+
+
 # ---------------------------------------------------------------------------
 # Parameters (mirrors the animatable UI exposed by SaDisplacedgeEffect.cs)
 # ---------------------------------------------------------------------------
@@ -189,7 +205,8 @@ class Params:
     turbulence_detail: int = 4        # fBm octaves
     noise_scale: float = 220.0        # px per noise unit (lower = larger swirls)
     flow_speed: float = 1.0           # animation rate multiplier
-    dispersion: float = 0.35          # 0-1, per-channel sample spread
+    dispersion: float = 0.35          # 0-1, sweep spread around scale 1.0
+    dispersion_steps: int = 16        # >=3, taps swept across the spread; 3 == classic R/G/B split
     iridescence: float = 0.55         # 0-1, glint colour strength
     light_angle_deg: float = 55.0
     seed: float = 0.0
@@ -241,17 +258,24 @@ def render(src: np.ndarray, p: Params, output_mode: str = "composite") -> np.nda
         ], axis=-1)
         return np.clip(vis, 0, 1)
 
-    px = xx + disp[..., 0] * (1.0 + p.dispersion)
-    py = yy + disp[..., 1] * (1.0 + p.dispersion)
-    gx2 = xx + disp[..., 0]
-    gy2 = yy + disp[..., 1]
-    bx = xx + disp[..., 0] * (1.0 - p.dispersion)
-    by = yy + disp[..., 1] * (1.0 - p.dispersion)
-
-    r = bilinear_sample(src, px, py)[..., 0]
-    g = bilinear_sample(src, gx2, gy2)[..., 1]
-    b = bilinear_sample(src, bx, by)[..., 2]
-    out = np.stack([r, g, b], axis=-1)
+    # Sweep dispersion_steps taps from scale (1-dispersion) to (1+dispersion)
+    # along the displacement vector, each weighted by an approximate
+    # spectral response, and blend them into a smoothly graded prism
+    # fringe. steps=3 reduces to the classic R/G/B split; more steps trade
+    # compute for a smoother, more continuous spectrum.
+    steps = max(3, int(round(p.dispersion_steps)))
+    color_sum = np.zeros(src.shape[:2] + (3,))
+    weight_sum = np.zeros(3)
+    for s in range(steps):
+        t = s / (steps - 1)
+        scale = 1.0 + p.dispersion * (2.0 * t - 1.0)
+        sx = xx + disp[..., 0] * scale
+        sy = yy + disp[..., 1] * scale
+        tap = bilinear_sample(src, sx, sy)
+        w = spectrum_weight(t)
+        color_sum += tap * w
+        weight_sum += w
+    out = color_sum / np.maximum(weight_sum, 1e-5)
 
     light = np.array([math.cos(math.radians(p.light_angle_deg)), math.sin(math.radians(p.light_angle_deg))])
     ndotl = edge_normal[..., 0] * light[0] + edge_normal[..., 1] * light[1]
@@ -284,6 +308,7 @@ def main() -> None:
     ap.add_argument("--turbulence", type=float, default=Params.turbulence)
     ap.add_argument("--radius", type=float, default=Params.radius)
     ap.add_argument("--dispersion", type=float, default=Params.dispersion)
+    ap.add_argument("--dispersion-steps", type=int, default=Params.dispersion_steps)
     ap.add_argument("--iridescence", type=float, default=Params.iridescence)
     ap.add_argument("--seed", type=float, default=Params.seed)
     ap.add_argument("--time", type=float, default=Params.time)
@@ -292,7 +317,8 @@ def main() -> None:
     src = load_image(args.input)
     params = Params(
         strength=args.strength, turbulence=args.turbulence, radius=args.radius,
-        dispersion=args.dispersion, iridescence=args.iridescence, seed=args.seed, time=args.time,
+        dispersion=args.dispersion, dispersion_steps=args.dispersion_steps,
+        iridescence=args.iridescence, seed=args.seed, time=args.time,
     )
     out = render(src, params, output_mode=args.mode)
     save_image(out, args.output)

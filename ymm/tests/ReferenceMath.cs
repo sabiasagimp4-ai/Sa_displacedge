@@ -55,4 +55,16 @@ internal static class ReferenceMath
         double dPsiDx = (Fbm(x + eps, y, octaves) - Fbm(x - eps, y, octaves)) / (2 * eps);
         return (dPsiDy, -dPsiDx);
     }
+
+    public static double Gauss(double x, double center, double sigma)
+    {
+        double d = (x - center) / sigma;
+        return Math.Exp(-.5 * d * d);
+    }
+
+    // Approximate per-channel spectral response for a dispersion sweep
+    // position t in [0, 1]. See Common.hlsli's SpectrumWeight for the
+    // rationale (overlapping bumps -> white centre, coloured extremes).
+    public static (double R, double G, double B) SpectrumWeight(double t) =>
+        (Gauss(t, .85, .35), Gauss(t, .5, .35), Gauss(t, .15, .35));
 }

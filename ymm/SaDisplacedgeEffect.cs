@@ -52,19 +52,23 @@ public sealed class SaDisplacedgeEffect : VideoEffectBase
     [AnimationSlider("F1", "%", 0, 100)]
     public Animation Dispersion { get; } = new(35, 0, 100);
 
-    [Display(Name = "虹色の強さ", Description = "変位の頂点に薄膜干渉風の虹色ハイライトを重ねます", Order = 10)]
+    [Display(Name = "色収差ステップ数", Description = "色収差のサンプリング回数。3で従来通りのRGB分離、大きいほど滑らかな虹のグラデーションになりますが計算量が増えます", Order = 10)]
+    [AnimationSlider("F0", "", 3, 128)]
+    public Animation DispersionSteps { get; } = new(16, 3, 128);
+
+    [Display(Name = "虹色の強さ", Description = "変位の頂点に薄膜干渉風の虹色ハイライトを重ねます", Order = 11)]
     [AnimationSlider("F1", "%", 0, 100)]
     public Animation Iridescence { get; } = new(55, 0, 100);
 
-    [Display(Name = "光の角度", Description = "虹色ハイライトが最も強くなる向き", Order = 11)]
+    [Display(Name = "光の角度", Description = "虹色ハイライトが最も強くなる向き", Order = 12)]
     [AnimationSlider("F1", "°", -180, 180)]
     public Animation LightAngle { get; } = new(55, -180, 180);
 
-    [Display(Name = "シード", Description = "渦模様のパターンを変える乱数の種", Order = 12)]
+    [Display(Name = "シード", Description = "渦模様のパターンを変える乱数の種", Order = 13)]
     [AnimationSlider("F0", "", 0, 999)]
     public Animation Seed { get; } = new(0, 0, 999);
 
-    [Display(Name = "出力", Description = "変位フィールドの向きや強さマスクを直接確認できます", Order = 13)]
+    [Display(Name = "出力", Description = "変位フィールドの向きや強さマスクを直接確認できます", Order = 14)]
     [EnumComboBox]
     public SaDisplacedgeOutputMode OutputMode { get => _outputMode; set => Set(ref _outputMode, value); }
     private SaDisplacedgeOutputMode _outputMode = SaDisplacedgeOutputMode.Composite;
@@ -76,7 +80,7 @@ public sealed class SaDisplacedgeEffect : VideoEffectBase
     protected override IEnumerable<IAnimatable> GetAnimatables() =>
     [
         DetectionScale, Threshold, Contrast, Radius, Strength, Turbulence, TurbulenceDetail,
-        SwirlSize, FlowSpeed, Dispersion, Iridescence, LightAngle, Seed,
+        SwirlSize, FlowSpeed, Dispersion, DispersionSteps, Iridescence, LightAngle, Seed,
     ];
 }
 

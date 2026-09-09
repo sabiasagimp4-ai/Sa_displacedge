@@ -20,7 +20,7 @@ flowchart TD
     MASK --> DISP["変位 = 流れ × 変位強度 × mask"]
     FLOW --> DISP
 
-    SRC --> SAMPLE["元画像をR/G/B別オフセットで再サンプリング<br/>(色収差)"]
+    SRC --> SAMPLE["元画像を色収差ステップ数だけスイープして<br/>スペクトル重み付き再サンプリング(色収差)"]
     DISP --> SAMPLE
     NORMAL --> GLINT["リムライト × 虹色パレット<br/>(虹色の強さ)"]
     DISP --> GLINT
@@ -34,7 +34,7 @@ flowchart TD
 |---|---|
 | ![](pipeline_examples/00_input.png) | ![](pipeline_examples/01_composite_default.png) |
 
-輪郭(髪の生え際・服の縁・遠景の屋根の輪郭など)に沿って画素が渦状にずれ、プリズムのような色収差の縁取りと虹色のきらめきが乗っています。平坦な空や強くぼかされた背景はしきい値以下のため、ほぼ元のまま残ります。
+輪郭(髪の生え際・服の縁・遠景の屋根の輪郭など)に沿って画素が渦状にずれ、プリズムのような色収差の縁取りと虹色のきらめきが乗っています。平坦な空や強くぼかされた背景はしきい値以下のため、ほぼ元のまま残ります。色収差ステップ数は既定の16で、旧来の3タップ(R/G/Bを1回ずつ)より滑らかな虹のグラデーションになっています。
 
 ## 3. パラメータの効き方
 
@@ -44,9 +44,9 @@ flowchart TD
 
 ![](pipeline_examples/02_composite_calm.png)
 
-### 3-2. 強め(`--strength 70 --turbulence 0.9 --dispersion 0.5 --iridescence 0.8 --radius 64`)
+### 3-2. 強め(`--strength 70 --turbulence 0.9 --dispersion 0.5 --dispersion-steps 48 --iridescence 0.8 --radius 64`)
 
-渦ノイズが支配的になり(乱流90%)、輪郭が液体ガラスのように大きく渦を巻いて溶け、強い色収差と虹色のきらめきが加わります。
+渦ノイズが支配的になり(乱流90%)、輪郭が液体ガラスのように大きく渦を巻いて溶け、ステップ数48による滑らかな虹色の色収差と虹色のきらめきが加わります。
 
 ![](pipeline_examples/03_composite_wild.png)
 
@@ -73,7 +73,7 @@ flowchart TD
 pip install numpy pillow
 python prototype/preview.py docs/pipeline_examples/00_input.png out.png
 python prototype/preview.py docs/pipeline_examples/00_input.png out_calm.png --strength 18 --turbulence 0.25 --dispersion 0.15 --iridescence 0.3
-python prototype/preview.py docs/pipeline_examples/00_input.png out_wild.png --strength 70 --turbulence 0.9 --dispersion 0.5 --iridescence 0.8 --radius 64
+python prototype/preview.py docs/pipeline_examples/00_input.png out_wild.png --strength 70 --turbulence 0.9 --dispersion 0.5 --dispersion-steps 48 --iridescence 0.8 --radius 64
 python prototype/preview.py docs/pipeline_examples/00_input.png out_mask.png --mode mask
 python prototype/preview.py docs/pipeline_examples/00_input.png out_flow.png --mode flow
 ```

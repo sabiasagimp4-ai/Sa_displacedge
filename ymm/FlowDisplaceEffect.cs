@@ -8,8 +8,9 @@ namespace SaDisplacedgeYmm;
 
 // The creative core: blends the edge-normal direction (Input1, blurred)
 // with a divergence-free curl-noise field into a flow vector, displaces
-// Input0 (the original source) along it with per-channel dispersion for a
-// prism fringe, and adds an animated thin-film-style iridescent glint.
+// Input0 (the original source) along it, sweeping DispersionSteps taps
+// across the displacement for a spectral prism fringe, and adds an
+// animated thin-film-style iridescent glint.
 // See Shaders/FlowDisplace.hlsl for the full pixel shader.
 internal sealed class FlowDisplaceEffect(IGraphicsDevicesAndContext devices)
     : D2D1CustomShaderEffectBase(Create<FlowDisplaceEffect.Impl>(devices))
@@ -27,6 +28,7 @@ internal sealed class FlowDisplaceEffect(IGraphicsDevicesAndContext devices)
     public float Threshold { set => SetValue(10, value); }
     public float Contrast { set => SetValue(11, value); }
     public float OutputMode { set => SetValue(12, value); }
+    public float DispersionSteps { set => SetValue(13, value); }
 
     [CustomEffect(2)]
     private sealed class Impl : D2D1CustomShaderEffectImplBase<Impl>
@@ -42,6 +44,7 @@ internal sealed class FlowDisplaceEffect(IGraphicsDevicesAndContext devices)
             Iridescence = .55f,
             LightAngle = 55f,
             Contrast = 1f,
+            DispersionSteps = 16f,
         };
 
         [CustomEffectProperty(PropertyType.Float, 0)] public float Strength { get => _constants.Strength; set { _constants.Strength = Math.Clamp(value, 0f, 400f); UpdateConstants(); } }
@@ -57,6 +60,7 @@ internal sealed class FlowDisplaceEffect(IGraphicsDevicesAndContext devices)
         [CustomEffectProperty(PropertyType.Float, 10)] public float Threshold { get => _constants.Threshold; set { _constants.Threshold = Math.Clamp(value, 0f, 255f); UpdateConstants(); } }
         [CustomEffectProperty(PropertyType.Float, 11)] public float Contrast { get => _constants.Contrast; set { _constants.Contrast = Math.Clamp(value, .1f, 4f); UpdateConstants(); } }
         [CustomEffectProperty(PropertyType.Float, 12)] public float OutputMode { get => _constants.OutputMode; set { _constants.OutputMode = Math.Clamp(MathF.Round(value), 0f, 2f); UpdateConstants(); } }
+        [CustomEffectProperty(PropertyType.Float, 13)] public float DispersionSteps { get => _constants.DispersionSteps; set { _constants.DispersionSteps = Math.Clamp(MathF.Round(value), 3f, 128f); UpdateConstants(); } }
 
         public Impl() : base(ShaderResourceLoader.Get("FlowDisplace")) { }
 
@@ -90,7 +94,7 @@ internal sealed class FlowDisplaceEffect(IGraphicsDevicesAndContext devices)
             public float Strength, Turbulence, TurbulenceDetail, NoiseScale;
             public float FlowSpeed, Time, Dispersion, Iridescence;
             public float LightAngle, Seed, Threshold, Contrast;
-            public float OutputMode, Padding0, Padding1, Padding2;
+            public float OutputMode, DispersionSteps, Padding1, Padding2;
             public float Left, Top, Right, Bottom;
         }
     }
