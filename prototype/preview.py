@@ -81,14 +81,29 @@ def scharr_gradient(luma: np.ndarray, step: float) -> tuple[np.ndarray, np.ndarr
     # shader. The old implementation rounded this value to an integer, which
     # made the lower half of the UI range visually identical.
     step = max(0.25, float(step))
+    # These taps are uniformly translated grids, not arbitrary coordinates.
+    # Interpolate along each axis using 1-D indices instead of allocating
+    # eight full-frame coordinate/index/weight grids.
     h, w = luma.shape
-    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
     gx = np.zeros_like(luma, dtype=np.result_type(luma, np.float32))
     gy = np.zeros_like(luma, dtype=np.result_type(luma, np.float32))
+    horizontal = []
+    for dx in (-step, 0.0, step):
+        # Form coordinates in float32, like the previous mgrid reference.
+        # Fractions may vary slightly per pixel due to float32 rounding.
+        x = np.arange(w, dtype=np.float32) + dx
+        lo = np.floor(x).astype(np.int32)
+        f = x - lo
+        horizontal.append(luma[:, np.clip(lo, 0, w-1)] * (1-f) +
+                          luma[:, np.clip(lo+1, 0, w-1)] * f)
     for j in range(3):
+        y = np.arange(h, dtype=np.float32) + (j-1)*step
+        lo = np.floor(y).astype(np.int32)
+        f = (y-lo)[:, None]
+        y0, y1 = np.clip(lo, 0, h-1), np.clip(lo+1, 0, h-1)
         for i in range(3):
             if _SCHARR_X[j, i] != 0 or _SCHARR_Y[j, i] != 0:
-                tap = _sample_scalar(luma, xx + (i - 1) * step, yy + (j - 1) * step)
+                tap = horizontal[i][y0] * (1-f) + horizontal[i][y1] * f
                 gx += _SCHARR_X[j, i] * tap
                 gy += _SCHARR_Y[j, i] * tap
     return gx, gy
@@ -110,8 +125,12 @@ def _box_blur_axis(arr: np.ndarray, radius: float, axis: int) -> np.ndarray:
     zero_shape[axis] = 1
     csum = np.concatenate([np.zeros(zero_shape, dtype=csum.dtype), csum], axis=axis)
     n = arr.shape[axis]
-    hi = np.take(csum, np.arange(2 * r + 1, 2 * r + 1 + n), axis=axis)
-    lo = np.take(csum, np.arange(0, n), axis=axis)
+    # Views replace np.take's full-size copies of both cumulative sums.
+    hi_slice = [slice(None)] * arr.ndim
+    lo_slice = [slice(None)] * arr.ndim
+    hi_slice[axis] = slice(2*r+1, 2*r+1+n)
+    lo_slice[axis] = slice(0, n)
+    hi, lo = csum[tuple(hi_slice)], csum[tuple(lo_slice)]
     return (hi - lo) / (2 * r + 1)
 
 
@@ -184,10 +203,8 @@ def fbm_gradient(p: np.ndarray, octaves: int) -> np.ndarray:
     """Gradient of the rotated-octave fBm with respect to its input p."""
     grad = np.zeros_like(p, dtype=np.result_type(p, np.float32))
     pp = p
-    axis_x = np.zeros_like(p, dtype=grad.dtype)
-    axis_y = np.zeros_like(p, dtype=grad.dtype)
-    axis_x[..., 0] = 1.0
-    axis_y[..., 1] = 1.0
+    axis_x = np.array([1.0, 0.0], dtype=grad.dtype)
+    axis_y = np.array([0.0, 1.0], dtype=grad.dtype)
     amp, freq = 0.5, 1.0
     for _ in range(max(1, min(8, int(octaves)))):
         grad_q = _value_noise_gradient(pp * freq) * freq
@@ -303,6 +320,8 @@ class Params:
 
 def render(src: np.ndarray, p: Params, output_mode: str = "composite") -> np.ndarray:
     """src: HxWx3 float32 in [0,1] straight sRGB. Returns HxWx3 float32 sRGB."""
+    if output_mode == "composite" and p.strength == 0 and p.iridescence == 0:
+        return src.copy()
     h, w = src.shape[:2]
     linear = srgb_to_linear(src)
     luma = oklab_l(linear)
@@ -325,7 +344,16 @@ def render(src: np.ndarray, p: Params, output_mode: str = "composite") -> np.nda
         gray = mask
         return np.stack([gray, gray, gray], axis=-1)
 
-    inv_mag = np.where(mag_b > 1e-6, 1.0 / mag_b, 0.0)
+    active = mask > 0
+    if not active.any():
+        if output_mode == "flow":
+            result = np.zeros_like(src)
+            result[..., :2] = .5
+            return result
+        return src.copy()
+
+    inv_mag = np.zeros_like(mag_b)
+    np.divide(1.0, mag_b, out=inv_mag, where=mag_b > 1e-6)
     edge_normal = np.stack([gx_b * inv_mag, gy_b * inv_mag], axis=-1)
 
     # phase_offset is added in the same units as time*flow_speed, *before*
@@ -341,8 +369,11 @@ def render(src: np.ndarray, p: Params, output_mode: str = "composite") -> np.nda
     turb = np.clip(p.turbulence, 0.0, 1.0)
     irid = np.clip(p.iridescence, 0.0, 1.0)
     curl = np.zeros_like(coord)
-    if turb > 1e-5 or irid > 1e-5:
-        curl = curl_noise(coord, p.turbulence_detail)
+    if turb > 1e-5 or (output_mode == "composite" and irid > 1e-5):
+        if active.all():
+            curl = curl_noise(coord, p.turbulence_detail)
+        elif active.any():
+            curl[active] = curl_noise(coord[active], p.turbulence_detail)
     curl_len = np.hypot(curl[..., 0], curl[..., 1])
     curl_norm = curl / np.maximum(1e-6, curl_len)[..., None]
     curl_norm[curl_len <= 1e-5] = np.array([1.0, 0.0], dtype=curl_norm.dtype)
@@ -370,14 +401,24 @@ def render(src: np.ndarray, p: Params, output_mode: str = "composite") -> np.nda
     # fringe. steps=3 reduces to the classic R/G/B split; more steps trade
     # compute for a smoother, more continuous spectrum.
     table = spectral_table(int(round(p.dispersion_steps)), p.fast_sampling)
-    color_sum = np.zeros(src.shape[:2] + (3,), dtype=src.dtype)
+    dense = active.all()
+    if dense:
+        sample_x, sample_y, displacement = xx, yy, disp
+        color_sum = np.zeros_like(src)
+    else:
+        sample_x, sample_y, displacement = xx[active], yy[active], disp[active]
+        color_sum = np.zeros((np.count_nonzero(active), 3), dtype=src.dtype)
     for row in table:
         scale = 1.0 + np.clip(p.dispersion, 0.0, 1.0) * row[3]
-        sx = xx + disp[..., 0] * scale
-        sy = yy + disp[..., 1] * scale
+        sx = sample_x + displacement[..., 0] * scale
+        sy = sample_y + displacement[..., 1] * scale
         tap = bilinear_sample(src, sx, sy)
         color_sum += tap * row[:3]
-    out = color_sum
+    if dense:
+        out = color_sum
+    else:
+        out = src.copy()
+        out[active] = color_sum
 
     light = np.array([math.cos(math.radians(p.light_angle_deg)), math.sin(math.radians(p.light_angle_deg))], dtype=src.dtype)
     ndotl = edge_normal[..., 0] * light[0] + edge_normal[..., 1] * light[1]

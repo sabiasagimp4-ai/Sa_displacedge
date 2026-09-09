@@ -110,7 +110,8 @@ internal sealed class FlowDisplaceEffect(IGraphicsDevicesAndContext devices)
         {
             // Worst-case displacement magnitude: Strength scaled up to
             // (1 + Dispersion) by the outer/inner dispersion taps.
-            int halo = (int)MathF.Ceiling(_constants.Strength * (1f + _constants.Dispersion)) + 1;
+            bool displaces = _constants.OutputMode < .5f && _constants.Dispersion > 1e-5f && _constants.Strength > 0f;
+            int halo = displaces ? (int)MathF.Ceiling(_constants.Strength * (1f + _constants.Dispersion)) + 1 : 0;
             inputRects[0] = new(outputRect.Left - halo, outputRect.Top - halo, outputRect.Right + halo, outputRect.Bottom + halo);
             inputRects[1] = outputRect;
         }

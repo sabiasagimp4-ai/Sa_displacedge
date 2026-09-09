@@ -50,9 +50,26 @@ D2D_PS_ENTRY(main)
     if (outputMode > 1.5)
         return float4(mask, mask, mask, 1);
 
-    float4 source = D2DSampleInputAtPosition(0, p);
-    if (outputMode < .5 && (mask <= 0 || source.a <= 0))
-        return source;
+    float4 source = 0;
+    if (outputMode < .5)
+    {
+        source = D2DSampleInputAtPosition(0, p);
+        if (mask <= 0 || source.a <= 0)
+            return source;
+    }
+
+    // No flow direction can affect a zero-mask diagnostic pixel.
+    if (mask <= 0)
+        return float4(.5, .5, 0, 1);
+
+    // Dispersion=0 follows the existing pass-through behaviour. Without
+    // glint, neither gradient normalization nor curl can affect the result.
+    if (outputMode < .5 && iridescence <= 1e-5 && (dispersion <= 1e-5 || strength <= 0))
+    {
+        float alpha = saturate(source.a);
+        float3 rgb = source.a > 0 ? source.rgb / source.a : 0;
+        return float4(saturate(rgb) * alpha, alpha);
+    }
 
     float invMag = magnitude > 1e-5 ? 1.0 / magnitude : 0;
     float2 edgeNormal = gradient * invMag;
