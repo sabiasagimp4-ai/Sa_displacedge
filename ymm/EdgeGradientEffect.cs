@@ -22,7 +22,7 @@ internal sealed class EdgeGradientEffect(IGraphicsDevicesAndContext devices)
         private Constants _constants = new() { DetectionScale = 1.5f };
 
         [CustomEffectProperty(PropertyType.Float, 0)]
-        public float DetectionScale { get => _constants.DetectionScale; set { _constants.DetectionScale = Math.Clamp(value, .25f, 6f); UpdateConstants(); } }
+        public float DetectionScale { get => _constants.DetectionScale; set { _constants.DetectionScale = Math.Clamp(value, .25f, 32f); UpdateConstants(); } }
 
         public Impl() : base(ShaderResourceLoader.Get("EdgeGradient")) { }
 
