@@ -1,0 +1,97 @@
+using System.Runtime.InteropServices;
+using Vortice;
+using Vortice.Direct2D1;
+using YukkuriMovieMaker.Commons;
+using YukkuriMovieMaker.Player.Video;
+
+namespace SaDisplacedgeYmm;
+
+// The creative core: blends the edge-normal direction (Input1, blurred)
+// with a divergence-free curl-noise field into a flow vector, displaces
+// Input0 (the original source) along it with per-channel dispersion for a
+// prism fringe, and adds an animated thin-film-style iridescent glint.
+// See Shaders/FlowDisplace.hlsl for the full pixel shader.
+internal sealed class FlowDisplaceEffect(IGraphicsDevicesAndContext devices)
+    : D2D1CustomShaderEffectBase(Create<FlowDisplaceEffect.Impl>(devices))
+{
+    public float Strength { set => SetValue(0, value); }
+    public float Turbulence { set => SetValue(1, value); }
+    public float TurbulenceDetail { set => SetValue(2, value); }
+    public float NoiseScale { set => SetValue(3, value); }
+    public float FlowSpeed { set => SetValue(4, value); }
+    public float Time { set => SetValue(5, value); }
+    public float Dispersion { set => SetValue(6, value); }
+    public float Iridescence { set => SetValue(7, value); }
+    public float LightAngle { set => SetValue(8, value); }
+    public float Seed { set => SetValue(9, value); }
+    public float Threshold { set => SetValue(10, value); }
+    public float Contrast { set => SetValue(11, value); }
+    public float OutputMode { set => SetValue(12, value); }
+
+    [CustomEffect(2)]
+    private sealed class Impl : D2D1CustomShaderEffectImplBase<Impl>
+    {
+        private Constants _constants = new()
+        {
+            Strength = 46f,
+            Turbulence = .6f,
+            TurbulenceDetail = 4f,
+            NoiseScale = 220f,
+            FlowSpeed = 1f,
+            Dispersion = .35f,
+            Iridescence = .55f,
+            LightAngle = 55f,
+            Contrast = 1f,
+        };
+
+        [CustomEffectProperty(PropertyType.Float, 0)] public float Strength { get => _constants.Strength; set { _constants.Strength = Math.Clamp(value, 0f, 400f); UpdateConstants(); } }
+        [CustomEffectProperty(PropertyType.Float, 1)] public float Turbulence { get => _constants.Turbulence; set { _constants.Turbulence = Math.Clamp(value, 0f, 1f); UpdateConstants(); } }
+        [CustomEffectProperty(PropertyType.Float, 2)] public float TurbulenceDetail { get => _constants.TurbulenceDetail; set { _constants.TurbulenceDetail = Math.Clamp(MathF.Round(value), 1f, 6f); UpdateConstants(); } }
+        [CustomEffectProperty(PropertyType.Float, 3)] public float NoiseScale { get => _constants.NoiseScale; set { _constants.NoiseScale = Math.Clamp(value, 8f, 4000f); UpdateConstants(); } }
+        [CustomEffectProperty(PropertyType.Float, 4)] public float FlowSpeed { get => _constants.FlowSpeed; set { _constants.FlowSpeed = Math.Clamp(value, 0f, 4f); UpdateConstants(); } }
+        [CustomEffectProperty(PropertyType.Float, 5)] public float Time { get => _constants.Time; set { _constants.Time = value; UpdateConstants(); } }
+        [CustomEffectProperty(PropertyType.Float, 6)] public float Dispersion { get => _constants.Dispersion; set { _constants.Dispersion = Math.Clamp(value, 0f, 1f); UpdateConstants(); } }
+        [CustomEffectProperty(PropertyType.Float, 7)] public float Iridescence { get => _constants.Iridescence; set { _constants.Iridescence = Math.Clamp(value, 0f, 1f); UpdateConstants(); } }
+        [CustomEffectProperty(PropertyType.Float, 8)] public float LightAngle { get => _constants.LightAngle; set { _constants.LightAngle = Math.Clamp(value, -180f, 180f); UpdateConstants(); } }
+        [CustomEffectProperty(PropertyType.Float, 9)] public float Seed { get => _constants.Seed; set { _constants.Seed = value; UpdateConstants(); } }
+        [CustomEffectProperty(PropertyType.Float, 10)] public float Threshold { get => _constants.Threshold; set { _constants.Threshold = Math.Clamp(value, 0f, 255f); UpdateConstants(); } }
+        [CustomEffectProperty(PropertyType.Float, 11)] public float Contrast { get => _constants.Contrast; set { _constants.Contrast = Math.Clamp(value, .1f, 4f); UpdateConstants(); } }
+        [CustomEffectProperty(PropertyType.Float, 12)] public float OutputMode { get => _constants.OutputMode; set { _constants.OutputMode = Math.Clamp(MathF.Round(value), 0f, 2f); UpdateConstants(); } }
+
+        public Impl() : base(ShaderResourceLoader.Get("FlowDisplace")) { }
+
+        protected override void UpdateConstants()
+        {
+            drawInformation?.SetOutputBuffer(BufferPrecision.PerChannel32Float, ChannelDepth.Four);
+            drawInformation?.SetPixelShaderConstantBuffer(_constants);
+        }
+
+        public override void MapInputRectsToOutputRect(RawRect[] inputRects, RawRect[] inputOpaqueSubRects, out RawRect outputRect, out RawRect outputOpaqueSubRect)
+        {
+            outputRect = inputRects[0];
+            outputOpaqueSubRect = default;
+            _constants.Left = outputRect.Left; _constants.Top = outputRect.Top;
+            _constants.Right = outputRect.Right; _constants.Bottom = outputRect.Bottom;
+            UpdateConstants();
+        }
+
+        public override void MapOutputRectToInputRects(RawRect outputRect, RawRect[] inputRects)
+        {
+            // Worst-case displacement magnitude: Strength scaled up to
+            // (1 + Dispersion) by the outer/inner dispersion taps.
+            int halo = (int)MathF.Ceiling(_constants.Strength * (1f + _constants.Dispersion)) + 1;
+            inputRects[0] = new(outputRect.Left - halo, outputRect.Top - halo, outputRect.Right + halo, outputRect.Bottom + halo);
+            inputRects[1] = outputRect;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct Constants
+        {
+            public float Strength, Turbulence, TurbulenceDetail, NoiseScale;
+            public float FlowSpeed, Time, Dispersion, Iridescence;
+            public float LightAngle, Seed, Threshold, Contrast;
+            public float OutputMode, Padding0, Padding1, Padding2;
+            public float Left, Top, Right, Bottom;
+        }
+    }
+}
