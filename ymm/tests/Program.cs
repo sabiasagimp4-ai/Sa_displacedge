@@ -38,27 +38,27 @@ for (int i = 0; i < 200; i++)
 }
 Console.WriteLine("PASS: ValueNoise local continuity (200 samples)");
 
-// The curl construction: v = (d(psi)/dy, -d(psi)/dx) built from central
-// differences. Central-difference operators along independent axes commute
-// exactly, so probing divergence with the SAME step used internally must
-// cancel to floating-point precision. See Common.hlsli / preview.py for why
-// probing with a mismatched step is a different (and unrelated) test.
-const double Eps = .5;
+// The optimized curl construction uses the analytic gradient of the scalar
+// fBm potential. Verify the gradient against an independent finite difference
+// and then verify the 90-degree rotation used by CurlNoise.
+const double Eps = 1e-5;
 const int Octaves = 4;
 for (int i = 0; i < 200; i++)
 {
     double x = rng.NextDouble() * 100 - 50;
     double y = rng.NextDouble() * 100 - 50;
 
-    var (vxR, _) = ReferenceMath.CurlNoise(x + Eps, y, Octaves, Eps);
-    var (vxL, _) = ReferenceMath.CurlNoise(x - Eps, y, Octaves, Eps);
-    var (_, vyT) = ReferenceMath.CurlNoise(x, y + Eps, Octaves, Eps);
-    var (_, vyB) = ReferenceMath.CurlNoise(x, y - Eps, Octaves, Eps);
-    double divergence = (vxR - vxL) / (2 * Eps) + (vyT - vyB) / (2 * Eps);
-    if (Math.Abs(divergence) > 1e-9)
-        throw new Exception($"CurlNoise divergence at ({x},{y}) = {divergence}, expected ~0");
+    var gradient = ReferenceMath.FbmGradient(x, y, Octaves);
+    double finiteX = (ReferenceMath.Fbm(x + Eps, y, Octaves) - ReferenceMath.Fbm(x - Eps, y, Octaves)) / (2 * Eps);
+    double finiteY = (ReferenceMath.Fbm(x, y + Eps, Octaves) - ReferenceMath.Fbm(x, y - Eps, Octaves)) / (2 * Eps);
+    if (Math.Abs(gradient.X - finiteX) > 1e-6 || Math.Abs(gradient.Y - finiteY) > 1e-6)
+        throw new Exception($"FbmGradient mismatch at ({x},{y})");
+
+    var curl = ReferenceMath.CurlNoise(x, y, Octaves);
+    if (Math.Abs(curl.X - gradient.Y) > 1e-12 || Math.Abs(curl.Y + gradient.X) > 1e-12)
+        throw new Exception($"CurlNoise rotation mismatch at ({x},{y})");
 }
-Console.WriteLine("PASS: CurlNoise divergence-free at matching step (200 samples)");
+Console.WriteLine("PASS: analytic fBm gradient and curl rotation (200 samples)");
 
 // Octave count must materially change the field: more octaves adds
 // higher-frequency detail, so a 1-octave and a 6-octave field should not be
