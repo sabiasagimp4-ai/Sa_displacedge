@@ -30,6 +30,8 @@ internal sealed class SaDisplacedgeProcessor : IVideoEffectProcessor
     private float _lastPhaseOffset = float.NaN;
     private float _lastThreshold = float.NaN;
     private float _lastContrast = float.NaN;
+    private float _lastSamplingQuality = float.NaN;
+    private bool _identity;
     private float _lastOutputMode = float.NaN;
 
     public SaDisplacedgeProcessor(IGraphicsDevicesAndContext devices, SaDisplacedgeEffect item)
@@ -68,7 +70,7 @@ internal sealed class SaDisplacedgeProcessor : IVideoEffectProcessor
         }
     }
 
-    public ID2D1Image Output => _output ?? _input ?? throw new InvalidOperationException("入力が未設定です。");
+    public ID2D1Image Output => (_identity ? _input : _output) ?? _input ?? throw new InvalidOperationException("入力が未設定です。");
 
     public void SetInput(ID2D1Image? input)
     {
@@ -157,6 +159,13 @@ internal sealed class SaDisplacedgeProcessor : IVideoEffectProcessor
 
         float outputMode = (float)_item.OutputMode;
         if (outputMode != _lastOutputMode) { _flow.OutputMode = outputMode; _lastOutputMode = outputMode; }
+
+        float samplingQuality = (float)_item.SamplingQuality;
+        if (samplingQuality != _lastSamplingQuality) { _flow.FastSampling = samplingQuality; _lastSamplingQuality = samplingQuality; }
+        // Preserve the existing dispersion=0 behaviour. This bypass avoids
+        // evaluating the entire graph when the composite is exactly unchanged.
+        _identity = outputMode < .5f && iridescence <= 1e-5f &&
+            (strength <= 0f || dispersion <= 1e-5f);
 
         return effectDescription.DrawDescription;
     }

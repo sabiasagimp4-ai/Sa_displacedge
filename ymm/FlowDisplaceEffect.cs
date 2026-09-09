@@ -31,6 +31,8 @@ internal sealed class FlowDisplaceEffect(IGraphicsDevicesAndContext devices)
     public float DispersionSteps { set => SetValue(13, value); }
     public float PhaseOffset { set => SetValue(14, value); }
 
+    public float FastSampling { set => SetValue(15, value); }
+
     [CustomEffect(2)]
     private sealed class Impl : D2D1CustomShaderEffectImplBase<Impl>
     {
@@ -67,10 +69,30 @@ internal sealed class FlowDisplaceEffect(IGraphicsDevicesAndContext devices)
         // instead of stepping in whole-frame jumps.
         [CustomEffectProperty(PropertyType.Float, 14)] public float PhaseOffset { get => _constants.PhaseOffset; set { _constants.PhaseOffset = Math.Clamp(value, -10000f, 10000f); UpdateConstants(); } }
 
+        private float _fastSampling;
+        private int _tableSteps = -1;
+        private bool _tableFast;
+        [CustomEffectProperty(PropertyType.Float, 15)]
+        public float FastSampling { get => _fastSampling; set { _fastSampling = value; UpdateConstants(); } }
+
         public Impl() : base(ShaderResourceLoader.Get("FlowDisplace")) { }
 
         protected override void UpdateConstants()
         {
+            int steps = (int)_constants.DispersionSteps;
+            bool fast = _fastSampling > .5f;
+            if (steps != _tableSteps || fast != _tableFast)
+            {
+                _constants.Taps = SpectralTable.Build(steps, fast, out int count);
+                _constants.TapCount = count;
+                _tableSteps = steps;
+                _tableFast = fast;
+            }
+            float angle = _constants.LightAngle * (MathF.PI / 180f);
+            _constants.LightX = MathF.Cos(angle);
+            _constants.LightY = MathF.Sin(angle);
+            _constants.Cutoff = _constants.Threshold / 255f * .12f;
+            _constants.InvContrast = 1f / MathF.Max(.01f, _constants.Contrast);
             drawInformation?.SetOutputBuffer(BufferPrecision.PerChannel32Float, ChannelDepth.Four);
             drawInformation?.SetPixelShaderConstantBuffer(_constants);
         }
@@ -99,8 +121,10 @@ internal sealed class FlowDisplaceEffect(IGraphicsDevicesAndContext devices)
             public float Strength, Turbulence, TurbulenceDetail, NoiseScale;
             public float FlowSpeed, Time, Dispersion, Iridescence;
             public float LightAngle, Seed, Threshold, Contrast;
-            public float OutputMode, DispersionSteps, PhaseOffset, Padding2;
+            public float OutputMode, DispersionSteps, PhaseOffset, TapCount;
             public float Left, Top, Right, Bottom;
+            public float LightX, LightY, Cutoff, InvContrast;
+            public SpectralTable.Buffer Taps;
         }
     }
 }

@@ -103,3 +103,38 @@ for (int i = 0; i <= 20; i++)
         throw new Exception("Blue should peak at the inner sweep position (t=0)");
 }
 Console.WriteLine("PASS: SpectrumWeight range and R/G/B peak ordering");
+
+// Exercise the production table builder, including its GPU buffer layout.
+if (System.Runtime.InteropServices.Marshal.SizeOf<SaDisplacedgeYmm.SpectralTable.Buffer>() != 128 * 16)
+    throw new Exception("Spectral constant buffer layout mismatch");
+for (int steps = 3; steps <= 128; steps++)
+{
+    var exact = SaDisplacedgeYmm.SpectralTable.Build(steps, false, out int n);
+    var fast = SaDisplacedgeYmm.SpectralTable.Build(steps, true, out int m);
+    if (n != steps || m != Math.Min(steps, 8)) throw new Exception("Wrong tap count");
+    var sum = System.Numerics.Vector3.Zero;
+    var moment = System.Numerics.Vector3.Zero;
+    var fastSum = sum;
+    var fastMoment = moment;
+    for (int i = 0; i < n; i++)
+    {
+        var w = new System.Numerics.Vector3(exact[i].X, exact[i].Y, exact[i].Z);
+        sum += w; moment += w * exact[i].W;
+        var (r, g, b) = ReferenceMath.SpectrumWeight((double)i / (n - 1));
+        // Ratios are independent of per-channel normalization; direct
+        // reference equality is checked below after calculating the total.
+        double totalR = 0;
+        for (int j = 0; j < n; j++) totalR += ReferenceMath.SpectrumWeight((double)j / (n - 1)).R;
+        if (Math.Abs(w.X - r / totalR) > 2e-6) throw new Exception("Standard weight mismatch");
+    }
+    for (int i = 0; i < m; i++)
+    {
+        var w = new System.Numerics.Vector3(fast[i].X, fast[i].Y, fast[i].Z);
+        if (w.X < 0 || w.Y < 0 || w.Z < 0) throw new Exception("Negative weight");
+        fastSum += w; fastMoment += w * fast[i].W;
+    }
+    if ((sum - System.Numerics.Vector3.One).Length() > 2e-6 ||
+        (fastSum - sum).Length() > 2e-6 || (fastMoment - moment).Length() > 2e-6)
+        throw new Exception($"Spectral mass/first moment changed at {steps}");
+}
+Console.WriteLine("PASS: production spectral table layout, weights, mass and first moment (3..128)");

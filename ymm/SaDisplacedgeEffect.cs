@@ -77,6 +77,11 @@ public sealed class SaDisplacedgeEffect : VideoEffectBase
     public SaDisplacedgeOutputMode OutputMode { get => _outputMode; set => Set(ref _outputMode, value); }
     private SaDisplacedgeOutputMode _outputMode = SaDisplacedgeOutputMode.Composite;
 
+    [Display(Name = "色収差の品質", Description = "軽量は最大8サンプルに集約。細かい模様や強い色収差では差が出ます", Order = 16)]
+    [EnumComboBox]
+    public SaDisplacedgeSamplingQuality SamplingQuality { get => _samplingQuality; set => Set(ref _samplingQuality, value); }
+    private SaDisplacedgeSamplingQuality _samplingQuality = SaDisplacedgeSamplingQuality.Standard;
+
     public override IEnumerable<string> CreateExoVideoFilters(int keyFrameIndex, ExoOutputDescription exoOutputDescription) => [];
 
     public override IVideoEffectProcessor CreateVideoEffect(IGraphicsDevicesAndContext devices) => new SaDisplacedgeProcessor(devices, this);
@@ -93,4 +98,10 @@ public enum SaDisplacedgeOutputMode
     [Display(Name = "合成")] Composite = 0,
     [Display(Name = "流れの向き")] Flow = 1,
     [Display(Name = "強さマスク")] Mask = 2,
+}
+
+public enum SaDisplacedgeSamplingQuality
+{
+    [Display(Name = "標準")] Standard = 0,
+    [Display(Name = "軽量（最大8サンプル）")] Fast = 1,
 }

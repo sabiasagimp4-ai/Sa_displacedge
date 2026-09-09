@@ -30,6 +30,7 @@ import argparse
 import math
 from dataclasses import dataclass
 from pathlib import Path
+from functools import lru_cache
 
 import numpy as np
 from PIL import Image
@@ -247,6 +248,34 @@ def spectrum_weight(t: float) -> np.ndarray:
     return np.array([_gauss(t, 0.85, 0.35), _gauss(t, 0.5, 0.35), _gauss(t, 0.15, 0.35)])
 
 
+@lru_cache(maxsize=252)
+def spectral_table(steps: int, fast: bool = False) -> np.ndarray:
+    """Normalized RGB weights + signed positions; mirrors SpectralTable.cs.
+
+    Fast mode linearly redistributes the original weights to at most eight
+    nodes. It preserves each channel's zeroth and first moments, but can
+    alias sharp/high-frequency content between those nodes.
+    """
+    steps = max(3, min(128, int(steps)))
+    count = min(steps, 8) if fast else steps
+    result = np.zeros((count, 4), dtype=np.float64)
+    total = np.zeros(3)
+    for i in range(steps):
+        t = i / (steps - 1)
+        w = spectrum_weight(t)
+        total += w
+        node = t * (count - 1)
+        lo = min(int(node), count - 1) if fast else i
+        hi = min(lo + 1, count - 1) if fast else i
+        f = node - lo if fast else 0.0
+        result[lo, :3] += w * (1 - f)
+        result[hi, :3] += w * f
+    result[:, :3] /= total
+    result[:, 3] = np.linspace(-1, 1, count)
+    result.setflags(write=False)
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Parameters (mirrors the animatable UI exposed by SaDisplacedgeEffect.cs)
 # ---------------------------------------------------------------------------
@@ -264,6 +293,7 @@ class Params:
     flow_speed: float = 1.0           # animation rate multiplier
     dispersion: float = 0.35          # 0-1, sweep spread around scale 1.0
     dispersion_steps: int = 16        # >=3, taps swept across the spread; 3 == classic R/G/B split
+    fast_sampling: bool = False       # approximate maximum-eight-tap mode
     iridescence: float = 0.55         # 0-1, glint colour strength
     light_angle_deg: float = 55.0
     seed: float = 0.0
@@ -339,19 +369,15 @@ def render(src: np.ndarray, p: Params, output_mode: str = "composite") -> np.nda
     # spectral response, and blend them into a smoothly graded prism
     # fringe. steps=3 reduces to the classic R/G/B split; more steps trade
     # compute for a smoother, more continuous spectrum.
-    steps = max(3, int(round(p.dispersion_steps)))
+    table = spectral_table(int(round(p.dispersion_steps)), p.fast_sampling)
     color_sum = np.zeros(src.shape[:2] + (3,), dtype=src.dtype)
-    weight_sum = np.zeros(3, dtype=src.dtype)
-    for s in range(steps):
-        t = s / (steps - 1)
-        scale = 1.0 + np.clip(p.dispersion, 0.0, 1.0) * (2.0 * t - 1.0)
+    for row in table:
+        scale = 1.0 + np.clip(p.dispersion, 0.0, 1.0) * row[3]
         sx = xx + disp[..., 0] * scale
         sy = yy + disp[..., 1] * scale
         tap = bilinear_sample(src, sx, sy)
-        w = spectrum_weight(t).astype(src.dtype, copy=False)
-        color_sum += tap * w
-        weight_sum += w
-    out = color_sum / np.maximum(weight_sum, 1e-5)
+        color_sum += tap * row[:3]
+    out = color_sum
 
     light = np.array([math.cos(math.radians(p.light_angle_deg)), math.sin(math.radians(p.light_angle_deg))], dtype=src.dtype)
     ndotl = edge_normal[..., 0] * light[0] + edge_normal[..., 1] * light[1]
@@ -385,6 +411,7 @@ def main() -> None:
     ap.add_argument("--radius", type=float, default=Params.radius)
     ap.add_argument("--dispersion", type=float, default=Params.dispersion)
     ap.add_argument("--dispersion-steps", type=int, default=Params.dispersion_steps)
+    ap.add_argument("--fast-sampling", action="store_true")
     ap.add_argument("--iridescence", type=float, default=Params.iridescence)
     ap.add_argument("--seed", type=float, default=Params.seed)
     ap.add_argument("--time", type=float, default=Params.time)
@@ -396,7 +423,7 @@ def main() -> None:
         strength=args.strength, turbulence=args.turbulence, radius=args.radius,
         dispersion=args.dispersion, dispersion_steps=args.dispersion_steps,
         iridescence=args.iridescence, seed=args.seed, time=args.time,
-        phase_offset=args.phase_offset,
+        phase_offset=args.phase_offset, fast_sampling=args.fast_sampling,
     )
     out = render(src, params, output_mode=args.mode)
     save_image(out, args.output)
