@@ -14,6 +14,25 @@ internal sealed class SaDisplacedgeProcessor : IVideoEffectProcessor
     private readonly ID2D1Image? _output;
     private ID2D1Image? _input;
     private bool _blurBypassed;
+    // YMM4 calls Update for every frame. Avoid re-uploading an unchanged
+    // custom-effect constant buffer 14 times per frame; Time is the only
+    // value that is intentionally written every frame.
+    private float _lastDetectionScale = float.NaN;
+    private float _lastRadius = float.NaN;
+    private float _lastStrength = float.NaN;
+    private float _lastTurbulence = float.NaN;
+    private float _lastTurbulenceDetail = float.NaN;
+    private float _lastNoiseScale = float.NaN;
+    private float _lastFlowSpeed = float.NaN;
+    private float _lastDispersion = float.NaN;
+    private float _lastDispersionSteps = float.NaN;
+    private float _lastIridescence = float.NaN;
+    private float _lastLightAngle = float.NaN;
+    private float _lastSeed = float.NaN;
+    private float _lastPhaseOffset = float.NaN;
+    private float _lastThreshold = float.NaN;
+    private float _lastContrast = float.NaN;
+    private int _lastOutputMode = int.MinValue;
 
     public SaDisplacedgeProcessor(IGraphicsDevicesAndContext devices, SaDisplacedgeEffect item)
     {
@@ -26,7 +45,10 @@ internal sealed class SaDisplacedgeProcessor : IVideoEffectProcessor
         {
             edge = new EdgeGradientEffect(devices);
             blur = new GaussianBlur(devices.DeviceContext);
-            blur.Optimization = GaussianBlurOptimization.Quality;
+            // Speed mode enables pre-scaling at smaller radii and uses linear
+            // filtering. This is the intended trade-off for an interactive
+            // effect preview; the shader still receives the same radius.
+            blur.Optimization = GaussianBlurOptimization.Speed;
             blur.BorderMode = BorderMode.Soft;
             flow = new FlowDisplaceEffect(devices);
             if (!edge.IsEnabled || !flow.IsEnabled)
@@ -72,7 +94,12 @@ internal sealed class SaDisplacedgeProcessor : IVideoEffectProcessor
         var length = effectDescription.ItemDuration.Frame;
         var fps = effectDescription.FPS;
 
-        _edge.DetectionScale = (float)_item.DetectionScale.GetValue(frame, length, fps);
+        float detectionScale = (float)_item.DetectionScale.GetValue(frame, length, fps);
+        if (detectionScale != _lastDetectionScale)
+        {
+            _edge.DetectionScale = detectionScale;
+            _lastDetectionScale = detectionScale;
+        }
 
         float radius = Math.Clamp((float)_item.Radius.GetValue(frame, length, fps), 0f, 256f);
         bool bypass = radius <= 0f;
@@ -82,23 +109,58 @@ internal sealed class SaDisplacedgeProcessor : IVideoEffectProcessor
             _flow.SetInput(1, edgeField, true);
             _blurBypassed = bypass;
         }
-        if (!bypass) _blur.StandardDeviation = radius;
+        if (bypass)
+        {
+            _lastRadius = float.NaN;
+        }
+        else if (radius != _lastRadius)
+        {
+            _blur.StandardDeviation = radius;
+            _lastRadius = radius;
+        }
 
-        _flow.Strength = (float)_item.Strength.GetValue(frame, length, fps);
-        _flow.Turbulence = (float)(_item.Turbulence.GetValue(frame, length, fps) / 100.0);
-        _flow.TurbulenceDetail = (float)_item.TurbulenceDetail.GetValue(frame, length, fps);
-        _flow.NoiseScale = (float)_item.SwirlSize.GetValue(frame, length, fps);
-        _flow.FlowSpeed = (float)(_item.FlowSpeed.GetValue(frame, length, fps) / 100.0);
+        float strength = (float)_item.Strength.GetValue(frame, length, fps);
+        if (strength != _lastStrength) { _flow.Strength = strength; _lastStrength = strength; }
+
+        float turbulence = (float)(_item.Turbulence.GetValue(frame, length, fps) / 100.0);
+        if (turbulence != _lastTurbulence) { _flow.Turbulence = turbulence; _lastTurbulence = turbulence; }
+
+        float turbulenceDetail = (float)_item.TurbulenceDetail.GetValue(frame, length, fps);
+        if (turbulenceDetail != _lastTurbulenceDetail) { _flow.TurbulenceDetail = turbulenceDetail; _lastTurbulenceDetail = turbulenceDetail; }
+
+        float noiseScale = (float)_item.SwirlSize.GetValue(frame, length, fps);
+        if (noiseScale != _lastNoiseScale) { _flow.NoiseScale = noiseScale; _lastNoiseScale = noiseScale; }
+
+        float flowSpeed = (float)(_item.FlowSpeed.GetValue(frame, length, fps) / 100.0);
+        if (flowSpeed != _lastFlowSpeed) { _flow.FlowSpeed = flowSpeed; _lastFlowSpeed = flowSpeed; }
         _flow.Time = (float)frame;
-        _flow.Dispersion = (float)(_item.Dispersion.GetValue(frame, length, fps) / 100.0);
-        _flow.DispersionSteps = (float)_item.DispersionSteps.GetValue(frame, length, fps);
-        _flow.Iridescence = (float)(_item.Iridescence.GetValue(frame, length, fps) / 100.0);
-        _flow.LightAngle = (float)_item.LightAngle.GetValue(frame, length, fps);
-        _flow.Seed = (float)_item.Seed.GetValue(frame, length, fps);
-        _flow.PhaseOffset = (float)_item.Phase.GetValue(frame, length, fps);
-        _flow.Threshold = (float)_item.Threshold.GetValue(frame, length, fps);
-        _flow.Contrast = (float)_item.Contrast.GetValue(frame, length, fps);
-        _flow.OutputMode = (float)_item.OutputMode;
+
+        float dispersion = (float)(_item.Dispersion.GetValue(frame, length, fps) / 100.0);
+        if (dispersion != _lastDispersion) { _flow.Dispersion = dispersion; _lastDispersion = dispersion; }
+
+        float dispersionSteps = (float)_item.DispersionSteps.GetValue(frame, length, fps);
+        if (dispersionSteps != _lastDispersionSteps) { _flow.DispersionSteps = dispersionSteps; _lastDispersionSteps = dispersionSteps; }
+
+        float iridescence = (float)(_item.Iridescence.GetValue(frame, length, fps) / 100.0);
+        if (iridescence != _lastIridescence) { _flow.Iridescence = iridescence; _lastIridescence = iridescence; }
+
+        float lightAngle = (float)_item.LightAngle.GetValue(frame, length, fps);
+        if (lightAngle != _lastLightAngle) { _flow.LightAngle = lightAngle; _lastLightAngle = lightAngle; }
+
+        float seed = (float)_item.Seed.GetValue(frame, length, fps);
+        if (seed != _lastSeed) { _flow.Seed = seed; _lastSeed = seed; }
+
+        float phaseOffset = (float)_item.Phase.GetValue(frame, length, fps);
+        if (phaseOffset != _lastPhaseOffset) { _flow.PhaseOffset = phaseOffset; _lastPhaseOffset = phaseOffset; }
+
+        float threshold = (float)_item.Threshold.GetValue(frame, length, fps);
+        if (threshold != _lastThreshold) { _flow.Threshold = threshold; _lastThreshold = threshold; }
+
+        float contrast = (float)_item.Contrast.GetValue(frame, length, fps);
+        if (contrast != _lastContrast) { _flow.Contrast = contrast; _lastContrast = contrast; }
+
+        int outputMode = (int)_item.OutputMode;
+        if (outputMode != _lastOutputMode) { _flow.OutputMode = outputMode; _lastOutputMode = outputMode; }
 
         return effectDescription.DrawDescription;
     }

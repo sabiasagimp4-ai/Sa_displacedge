@@ -233,6 +233,11 @@ def render(src: np.ndarray, p: Params, output_mode: str = "composite") -> np.nda
     mask = np.clip((mag_b - cutoff) / max(1e-6, softness), 0.0, 1.0)
     mask = mask ** (1.0 / max(0.1, p.contrast))
 
+    # The mask diagnostic is independent of flow/noise and should not pay for
+    # those calculations. Keep this branch in sync with FlowDisplace.hlsl.
+    if output_mode == "mask":
+        return np.stack([mask, mask, mask], axis=-1)
+
     inv_mag = np.where(mag_b > 1e-6, 1.0 / mag_b, 0.0)
     edge_normal = np.stack([gx_b * inv_mag, gy_b * inv_mag], axis=-1)
 
@@ -246,18 +251,22 @@ def render(src: np.ndarray, p: Params, output_mode: str = "composite") -> np.nda
     coord = np.stack([xx, yy], axis=-1) / p.noise_scale
     coord = coord + p.seed * 17.0
     coord[..., 0] += anim_time * 0.35
-    curl = curl_noise(coord, p.turbulence_detail)
-    curl_norm = curl / np.maximum(1e-6, np.hypot(curl[..., 0], curl[..., 1]))[..., None]
-
-    flow = edge_normal * (1 - p.turbulence) + curl_norm * p.turbulence
+    turbulence_amount = float(np.clip(p.turbulence, 0.0, 1.0))
+    curl = np.zeros_like(coord)
+    flow = edge_normal
+    # At zero turbulence the curl field cannot affect the flow. If the glint
+    # is also disabled, skip the expensive noise field; otherwise retain the
+    # original curl-based glint phase so the result stays visually identical.
+    if turbulence_amount > 1e-5 or p.iridescence > 1e-5:
+        curl = curl_noise(coord, p.turbulence_detail)
+        curl_norm = curl / np.maximum(1e-6, np.hypot(curl[..., 0], curl[..., 1]))[..., None]
+        if turbulence_amount > 1e-5:
+            flow = edge_normal * (1 - turbulence_amount) + curl_norm * turbulence_amount
     flow_len = np.maximum(1e-6, np.hypot(flow[..., 0], flow[..., 1]))
     flow = flow / flow_len[..., None]
 
     disp = flow * (p.strength * mask)[..., None]
 
-    if output_mode == "mask":
-        gray = mask
-        return np.stack([gray, gray, gray], axis=-1)
     if output_mode == "flow":
         vis = np.stack([
             0.5 + 0.5 * flow[..., 0] * mask,
@@ -272,18 +281,24 @@ def render(src: np.ndarray, p: Params, output_mode: str = "composite") -> np.nda
     # fringe. steps=3 reduces to the classic R/G/B split; more steps trade
     # compute for a smoother, more continuous spectrum.
     steps = max(3, int(round(p.dispersion_steps)))
-    color_sum = np.zeros(src.shape[:2] + (3,))
-    weight_sum = np.zeros(3)
-    for s in range(steps):
-        t = s / (steps - 1)
-        scale = 1.0 + p.dispersion * (2.0 * t - 1.0)
-        sx = xx + disp[..., 0] * scale
-        sy = yy + disp[..., 1] * scale
-        tap = bilinear_sample(src, sx, sy)
-        w = spectrum_weight(t)
-        color_sum += tap * w
-        weight_sum += w
-    out = color_sum / np.maximum(weight_sum, 1e-5)
+    dispersion = float(np.clip(p.dispersion, 0.0, 1.0))
+    if dispersion <= 1e-5 or p.strength <= 1e-5:
+        # Every dispersion tap is identical in these cases, so one bilinear
+        # fetch is mathematically equal to the normalized weighted sum.
+        out = bilinear_sample(src, xx + disp[..., 0], yy + disp[..., 1])
+    else:
+        color_sum = np.zeros(src.shape[:2] + (3,))
+        weight_sum = np.zeros(3)
+        for s in range(steps):
+            t = s / (steps - 1)
+            scale = 1.0 + dispersion * (2.0 * t - 1.0)
+            sx = xx + disp[..., 0] * scale
+            sy = yy + disp[..., 1] * scale
+            tap = bilinear_sample(src, sx, sy)
+            w = spectrum_weight(t)
+            color_sum += tap * w
+            weight_sum += w
+        out = color_sum / np.maximum(weight_sum, 1e-5)
 
     light = np.array([math.cos(math.radians(p.light_angle_deg)), math.sin(math.radians(p.light_angle_deg))])
     ndotl = edge_normal[..., 0] * light[0] + edge_normal[..., 1] * light[1]
@@ -312,12 +327,19 @@ def main() -> None:
     ap.add_argument("input", type=Path)
     ap.add_argument("output", type=Path)
     ap.add_argument("--mode", choices=["composite", "mask", "flow"], default="composite")
+    ap.add_argument("--detection-scale", type=float, default=Params.detection_scale)
+    ap.add_argument("--threshold", type=float, default=Params.threshold)
+    ap.add_argument("--contrast", type=float, default=Params.contrast)
     ap.add_argument("--strength", type=float, default=Params.strength)
     ap.add_argument("--turbulence", type=float, default=Params.turbulence)
+    ap.add_argument("--turbulence-detail", type=int, default=Params.turbulence_detail)
     ap.add_argument("--radius", type=float, default=Params.radius)
+    ap.add_argument("--noise-scale", type=float, default=Params.noise_scale)
+    ap.add_argument("--flow-speed", type=float, default=Params.flow_speed)
     ap.add_argument("--dispersion", type=float, default=Params.dispersion)
     ap.add_argument("--dispersion-steps", type=int, default=Params.dispersion_steps)
     ap.add_argument("--iridescence", type=float, default=Params.iridescence)
+    ap.add_argument("--light-angle", type=float, default=Params.light_angle_deg)
     ap.add_argument("--seed", type=float, default=Params.seed)
     ap.add_argument("--time", type=float, default=Params.time)
     ap.add_argument("--phase-offset", type=float, default=Params.phase_offset)
@@ -325,9 +347,14 @@ def main() -> None:
 
     src = load_image(args.input)
     params = Params(
-        strength=args.strength, turbulence=args.turbulence, radius=args.radius,
+        detection_scale=args.detection_scale, threshold=args.threshold,
+        contrast=args.contrast, strength=args.strength,
+        turbulence=args.turbulence, turbulence_detail=args.turbulence_detail,
+        radius=args.radius, noise_scale=args.noise_scale,
+        flow_speed=args.flow_speed,
         dispersion=args.dispersion, dispersion_steps=args.dispersion_steps,
-        iridescence=args.iridescence, seed=args.seed, time=args.time,
+        iridescence=args.iridescence, light_angle_deg=args.light_angle,
+        seed=args.seed, time=args.time,
         phase_offset=args.phase_offset,
     )
     out = render(src, params, output_mode=args.mode)

@@ -44,9 +44,19 @@ D2D_PS_ENTRY(main)
     float mask = saturate((magnitude - cutoff) / .05);
     mask = pow(mask, 1.0 / max(.1, contrast));
 
-    float4 source = D2DSampleInputAtPosition(0, p);
-    if (outputMode < .5 && (mask <= 0 || source.a <= 0))
-        return source;
+    // Mask output does not need the source image, edge normal, or curl noise.
+    // Keeping this branch before the expensive part makes the diagnostic mode
+    // useful while tuning a comp instead of making it pay for the full effect.
+    if (outputMode > 1.5)
+        return float4(mask, mask, mask, 1);
+
+    float4 source = 0;
+    if (outputMode < .5)
+    {
+        source = D2DSampleInputAtPosition(0, p);
+        if (mask <= 0 || source.a <= 0)
+            return source;
+    }
 
     float invMag = magnitude > 1e-5 ? 1.0 / magnitude : 0;
     float2 edgeNormal = gradient * invMag;
@@ -59,19 +69,29 @@ D2D_PS_ENTRY(main)
     float animTime = time * flowSpeed + phaseOffset;
     float2 coord = p / max(1.0, noiseScale) + seed * 17.0;
     coord.x += animTime * .015;
-    int octaves = (int) clamp(round(turbulenceDetail), 1, 6);
-    float2 curl = CurlNoise(coord, octaves);
-    float curlLen = length(curl);
-    float2 curlDir = curlLen > 1e-5 ? curl / curlLen : float2(1, 0);
-
-    float2 flow = lerp(edgeNormal, curlDir, saturate(turbulence));
+    float turbulenceAmount = saturate(turbulence);
+    float2 curl = 0;
+    float2 flow = edgeNormal;
+    // At zero turbulence the curl field cannot affect the flow. If the glint
+    // is also disabled, avoid its dozens of hash/noise evaluations as well.
+    // When glint is enabled we retain the original curl-based phase so the
+    // optimization does not change the look of an edge-only preset.
+    if (turbulenceAmount > 1e-5 || iridescence > 1e-5)
+    {
+        int octaves = (int) clamp(round(turbulenceDetail), 1, 6);
+        curl = CurlNoise(coord, octaves);
+        float curlLen = length(curl);
+        if (turbulenceAmount > 1e-5)
+        {
+            float2 curlDir = curlLen > 1e-5 ? curl / curlLen : float2(1, 0);
+            flow = lerp(edgeNormal, curlDir, turbulenceAmount);
+        }
+    }
     float flowLen = length(flow);
     flow = flowLen > 1e-5 ? flow / flowLen : 0;
 
     float2 disp = flow * (strength * mask);
 
-    if (outputMode > 1.5)
-        return float4(mask, mask, mask, 1);
     if (outputMode > .5)
         return float4(.5 + .5 * flow.x * mask, .5 + .5 * flow.y * mask, mask, 1);
 
@@ -83,21 +103,36 @@ D2D_PS_ENTRY(main)
     float4 uv = D2DGetInputCoordinate(0);
     float d = saturate(dispersion);
     int steps = (int) clamp(round(dispersionSteps), 3, 128);
-    float3 colorSum = 0, weightSum = 0;
-    [loop]
-    for (int s = 0; s < steps; ++s)
+    float3 rgb;
+    // All taps are identical when dispersion is zero, and they are identical
+    // when strength is zero. The old loop still performed up to 128 texture
+    // reads in those cases. One sample is mathematically exact here because
+    // the spectral weights are normalized below.
+    if (d <= 1e-5 || strength <= 1e-5)
     {
-        float t = (float) s / (float) (steps - 1);
-        float scale = 1 + d * (2 * t - 1);
-        float2 samplePosition = clamp(p + disp * scale, inputBounds.xy, inputBounds.zw - 1);
+        float2 samplePosition = clamp(p + disp, inputBounds.xy, inputBounds.zw - 1);
         float4 c = InputTexture0.SampleLevel(InputSampler0, uv.xy + uv.zw * (samplePosition - p), 0);
         float a = saturate(c.a);
-        float3 tap = a > 0 ? c.rgb / a : 0;
-        float3 w = SpectrumWeight(t);
-        colorSum += tap * w;
-        weightSum += w;
+        rgb = a > 0 ? c.rgb / a : 0;
     }
-    float3 rgb = colorSum / max(weightSum, 1e-5);
+    else
+    {
+        float3 colorSum = 0, weightSum = 0;
+        [loop]
+        for (int s = 0; s < steps; ++s)
+        {
+            float t = (float) s / (float) (steps - 1);
+            float scale = 1 + d * (2 * t - 1);
+            float2 samplePosition = clamp(p + disp * scale, inputBounds.xy, inputBounds.zw - 1);
+            float4 c = InputTexture0.SampleLevel(InputSampler0, uv.xy + uv.zw * (samplePosition - p), 0);
+            float a = saturate(c.a);
+            float3 tap = a > 0 ? c.rgb / a : 0;
+            float3 w = SpectrumWeight(t);
+            colorSum += tap * w;
+            weightSum += w;
+        }
+        rgb = colorSum / max(weightSum, 1e-5);
+    }
 
     float2 lightDir = float2(cos(radians(lightAngle)), sin(radians(lightAngle)));
     float ndotl = saturate(dot(edgeNormal, lightDir) * .5 + .5);

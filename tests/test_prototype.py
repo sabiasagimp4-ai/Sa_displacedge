@@ -169,6 +169,15 @@ class RenderContract(unittest.TestCase):
         out_128 = preview.render(src, preview.Params(dispersion_steps=128))
         np.testing.assert_allclose(out_64, out_128, atol=0.01)
 
+    def test_zero_dispersion_is_independent_of_step_count(self):
+        # The optimized single-fetch path must preserve the old normalized
+        # weighted-sweep result when all taps land at the same coordinate.
+        rng = np.random.default_rng(15)
+        src = rng.random((24, 24, 3))
+        out_3 = preview.render(src, preview.Params(dispersion=0.0, dispersion_steps=3))
+        out_128 = preview.render(src, preview.Params(dispersion=0.0, dispersion_steps=128))
+        np.testing.assert_array_equal(out_3, out_128)
+
 
 class PhaseOffset(unittest.TestCase):
     def test_equivalent_to_advancing_time(self):
