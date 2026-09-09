@@ -2,7 +2,7 @@
 
 These do not execute Direct2D or YMM4; they check the numeric properties the
 HLSL port relies on (kernel normalization, weight-carry correctness, and the
-divergence-free property of the curl-noise flow field), the same role
+rotated-gradient construction of the curl-noise flow field), the same role
 Sa_aohue's tests/test_ymm_v02.py plays for its own kernels.
 """
 import math
@@ -55,31 +55,30 @@ class ScharrGradient(unittest.TestCase):
 
 
 class CurlNoiseIsDivergenceFree(unittest.TestCase):
-    def test_discrete_divergence_is_near_zero_at_matching_step(self):
-        # curl_noise builds v = (d(fbm)/dy, -d(fbm)/dx) from *central*
-        # differences. Central-difference operators along independent axes
-        # commute exactly (they are linear combinations of the same grid
-        # samples in either order), so probing divergence with the SAME
-        # step used internally (eps=0.5) must cancel to float precision.
-        # Probing with a *different* outer step re-differentiates a field
-        # that already has eps=0.5 baked into it and is not expected to
-        # cancel -- that would be testing an unrelated quantity, not this
-        # field's divergence.
+    def test_analytic_gradient_matches_potential(self):
+        # The optimized path differentiates the smooth value-noise potential
+        # analytically. Compare it against an independent finite difference of
+        # the scalar fBm at points away from integer cell boundaries.
         rng = np.random.default_rng(7)
         pts = rng.uniform(-50, 50, size=(200, 2))
-        eps = 0.5
+        eps = 1e-5
         octaves = 4
-
-        def curl_at(p):
-            return preview.curl_noise(p[None, :], octaves, eps=eps)[0]
-
         for p in pts:
-            vx1 = curl_at(p + np.array([eps, 0]))[0]
-            vx0 = curl_at(p - np.array([eps, 0]))[0]
-            vy1 = curl_at(p + np.array([0, eps]))[1]
-            vy0 = curl_at(p - np.array([0, eps]))[1]
-            div = (vx1 - vx0) / (2 * eps) + (vy1 - vy0) / (2 * eps)
-            self.assertAlmostEqual(div, 0.0, places=9)
+            analytic = preview.fbm_gradient(p[None, :], octaves)[0]
+            dx = np.array([eps, 0.0])
+            dy = np.array([0.0, eps])
+            finite = np.array([
+                (preview.fbm((p + dx)[None, :], octaves)[0] - preview.fbm((p - dx)[None, :], octaves)[0]) / (2 * eps),
+                (preview.fbm((p + dy)[None, :], octaves)[0] - preview.fbm((p - dy)[None, :], octaves)[0]) / (2 * eps),
+            ])
+            np.testing.assert_allclose(analytic, finite, atol=2e-4, rtol=2e-4)
+
+    def test_curl_is_the_rotated_gradient(self):
+        rng = np.random.default_rng(8)
+        pts = rng.uniform(-50, 50, size=(200, 2))
+        gradient = preview.fbm_gradient(pts, 4)
+        curl = preview.curl_noise(pts, 4)
+        np.testing.assert_allclose(curl, np.stack([gradient[:, 1], -gradient[:, 0]], axis=-1), atol=1e-7)
 
 
 class BilinearSample(unittest.TestCase):
