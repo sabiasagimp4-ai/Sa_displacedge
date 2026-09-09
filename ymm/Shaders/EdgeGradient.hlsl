@@ -32,6 +32,10 @@ D2D_PS_ENTRY(main)
     float step = max(.25, detectionScale);
     float4 uv = D2DGetInputCoordinate(0);
 
+    // The centre tap is needed only for alpha because the Scharr centre
+    // coefficients are zero. Reusing it removes one texture fetch per pixel.
+    float4 center = InputTexture0.SampleLevel(InputSampler0, uv.xy, 0);
+
     float gx = 0, gy = 0;
     [unroll]
     for (int j = -1; j <= 1; ++j)
@@ -39,18 +43,21 @@ D2D_PS_ENTRY(main)
         [unroll]
         for (int i = -1; i <= 1; ++i)
         {
-            float2 samplePosition = clamp(p + float2(i, j) * step, inputBounds.xy, inputBounds.zw - 1);
-            float4 c = InputTexture0.SampleLevel(InputSampler0, uv.xy + uv.zw * (samplePosition - p), 0);
-            float a = saturate(c.a);
-            float l = a > 0 ? OkLabL(DecodeSrgb(saturate(c.rgb / a))) : 0;
-            gx += ScharrX[j + 1][i + 1] * l;
-            gy += ScharrY[j + 1][i + 1] * l;
+            if (i != 0 || j != 0)
+            {
+                float2 samplePosition = clamp(p + float2(i, j) * step, inputBounds.xy, inputBounds.zw - 1);
+                float4 c = InputTexture0.SampleLevel(InputSampler0, uv.xy + uv.zw * (samplePosition - p), 0);
+                float a = saturate(c.a);
+                float l = a > 0 ? OkLabL(DecodeSrgb(saturate(c.rgb / a))) : 0;
+                gx += ScharrX[j + 1][i + 1] * l;
+                gy += ScharrY[j + 1][i + 1] * l;
+            }
         }
     }
     gx /= 16.0;
     gy /= 16.0;
     float mag = length(float2(gx, gy));
 
-    float alpha = saturate(D2DSampleInputAtPosition(0, p).a);
+    float alpha = saturate(center.a);
     return float4(gx, gy, mag, 1) * alpha;
 }

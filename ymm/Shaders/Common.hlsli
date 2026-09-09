@@ -1,8 +1,9 @@
 // Shared helpers for the Sa_displacedge shader passes: sRGB/OKLab colour,
 // and a divergence-free curl-noise field built from a rotated-octave
-// value-noise fBm. Ported 1:1 (including the exact derivative pairing) from
-// prototype/preview.py, which is verified by tests/test_prototype.py --
-// keep the two in sync if either changes.
+// value-noise fBm. The curl field uses the analytic gradient of the smooth
+// value-noise potential, so one fBm pass replaces the old four finite-
+// difference fBm passes per pixel. The matching reference is
+// prototype/preview.py; keep the two in sync if either changes.
 
 float3 DecodeSrgb(float3 c)
 {
@@ -43,6 +44,26 @@ float ValueNoise(float2 p)
 
 static const float2x2 OctaveRotation = { .8, .6, -.6, .8 };
 
+// Analytic gradient of ValueNoise with respect to p. Smoothstep makes the
+// value field C1 across cell borders, so rotating this gradient by 90 degrees
+// gives a continuous, divergence-free curl field (up to floating-point error).
+float2 ValueNoiseGradient(float2 p)
+{
+    float2 i = floor(p);
+    float2 f = frac(p);
+    float a = Hash21(i);
+    float b = Hash21(i + float2(1, 0));
+    float c = Hash21(i + float2(0, 1));
+    float d = Hash21(i + float2(1, 1));
+    float2 u = f * f * (3 - 2 * f);
+    float2 du = 6 * f * (1 - f);
+    float x0 = lerp(a, b, u.x);
+    float x1 = lerp(c, d, u.x);
+    float dValueDx = lerp(b - a, d - c, u.y) * du.x;
+    float dValueDy = (x1 - x0) * du.y;
+    return float2(dValueDx, dValueDy);
+}
+
 // Fractal Brownian motion: each octave is rotated before doubling frequency
 // so the summed field has no dominant grid axis (a plain power-of-two
 // pyramid without rotation shows visible horizontal/vertical streaking).
@@ -60,21 +81,38 @@ float Fbm(float2 p, int octaves)
     return value;
 }
 
+// Gradient of the rotated-octave fBm with respect to the original p. Each
+// octave rotates its local coordinates; axisX/axisY carry the chain rule back
+// to the original coordinate system.
+float2 FbmGradient(float2 p, int octaves)
+{
+    float2 gradient = 0;
+    float2 axisX = float2(1, 0);
+    float2 axisY = float2(0, 1);
+    float amp = .5;
+    float freq = 1;
+    [loop]
+    for (int i = 0; i < octaves; ++i)
+    {
+        float2 gradQ = ValueNoiseGradient(p * freq) * freq;
+        gradient.x += amp * dot(gradQ, axisX);
+        gradient.y += amp * dot(gradQ, axisY);
+        p = mul(OctaveRotation, p);
+        axisX = mul(OctaveRotation, axisX);
+        axisY = mul(OctaveRotation, axisY);
+        freq *= 2.03;
+        amp *= .5;
+    }
+    return gradient;
+}
+
 // Curl of a scalar fBm potential psi: v = (d(psi)/dy, -d(psi)/dx). The
-// *mixed* partials cancel in the divergence (d2(psi)/dydx == d2(psi)/dxdy),
-// which is what makes this field swirl -- dye stirred into water -- instead
-// of pooling or draining anywhere. Pairing same-axis derivatives instead
-// (an easy mistake -- prototype/preview.py caught exactly this once) gives
-// the Laplacian difference, not a divergence-free field. Central-difference
-// operators commute exactly regardless of step size, so any eps is
-// admissible here; downstream code must not re-differentiate this result
-// with a *different* step, which would probe unrelated sub-eps structure.
+// mixed partials cancel in the divergence, which is what makes this field
+// swirl instead of pooling or draining.
 float2 CurlNoise(float2 p, int octaves)
 {
-    const float e = .5;
-    float dPsiDy = (Fbm(p + float2(0, e), octaves) - Fbm(p - float2(0, e), octaves)) / (2 * e);
-    float dPsiDx = (Fbm(p + float2(e, 0), octaves) - Fbm(p - float2(e, 0), octaves)) / (2 * e);
-    return float2(dPsiDy, -dPsiDx);
+    float2 gradient = FbmGradient(p, octaves);
+    return float2(gradient.y, -gradient.x);
 }
 
 // Inigo Quilez-style cosine palette: a cheap analytic stand-in for

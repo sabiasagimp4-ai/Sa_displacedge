@@ -50,22 +50,22 @@ internal sealed class FlowDisplaceEffect(IGraphicsDevicesAndContext devices)
 
         [CustomEffectProperty(PropertyType.Float, 0)] public float Strength { get => _constants.Strength; set { _constants.Strength = Math.Clamp(value, 0f, 400f); UpdateConstants(); } }
         [CustomEffectProperty(PropertyType.Float, 1)] public float Turbulence { get => _constants.Turbulence; set { _constants.Turbulence = Math.Clamp(value, 0f, 1f); UpdateConstants(); } }
-        [CustomEffectProperty(PropertyType.Float, 2)] public float TurbulenceDetail { get => _constants.TurbulenceDetail; set { _constants.TurbulenceDetail = Math.Clamp(MathF.Round(value), 1f, 6f); UpdateConstants(); } }
+        [CustomEffectProperty(PropertyType.Float, 2)] public float TurbulenceDetail { get => _constants.TurbulenceDetail; set { _constants.TurbulenceDetail = Math.Clamp(MathF.Round(value), 1f, 8f); UpdateConstants(); } }
         [CustomEffectProperty(PropertyType.Float, 3)] public float NoiseScale { get => _constants.NoiseScale; set { _constants.NoiseScale = Math.Clamp(value, 8f, 4000f); UpdateConstants(); } }
-        [CustomEffectProperty(PropertyType.Float, 4)] public float FlowSpeed { get => _constants.FlowSpeed; set { _constants.FlowSpeed = Math.Clamp(value, 0f, 4f); UpdateConstants(); } }
+        [CustomEffectProperty(PropertyType.Float, 4)] public float FlowSpeed { get => _constants.FlowSpeed; set { _constants.FlowSpeed = Math.Clamp(value, 0f, 10f); UpdateConstants(); } }
         [CustomEffectProperty(PropertyType.Float, 5)] public float Time { get => _constants.Time; set { _constants.Time = value; UpdateConstants(); } }
         [CustomEffectProperty(PropertyType.Float, 6)] public float Dispersion { get => _constants.Dispersion; set { _constants.Dispersion = Math.Clamp(value, 0f, 1f); UpdateConstants(); } }
         [CustomEffectProperty(PropertyType.Float, 7)] public float Iridescence { get => _constants.Iridescence; set { _constants.Iridescence = Math.Clamp(value, 0f, 1f); UpdateConstants(); } }
         [CustomEffectProperty(PropertyType.Float, 8)] public float LightAngle { get => _constants.LightAngle; set { _constants.LightAngle = Math.Clamp(value, -180f, 180f); UpdateConstants(); } }
-        [CustomEffectProperty(PropertyType.Float, 9)] public float Seed { get => _constants.Seed; set { _constants.Seed = value; UpdateConstants(); } }
+        [CustomEffectProperty(PropertyType.Float, 9)] public float Seed { get => _constants.Seed; set { _constants.Seed = Math.Clamp(value, -4096f, 4096f); UpdateConstants(); } }
         [CustomEffectProperty(PropertyType.Float, 10)] public float Threshold { get => _constants.Threshold; set { _constants.Threshold = Math.Clamp(value, 0f, 255f); UpdateConstants(); } }
-        [CustomEffectProperty(PropertyType.Float, 11)] public float Contrast { get => _constants.Contrast; set { _constants.Contrast = Math.Clamp(value, .1f, 4f); UpdateConstants(); } }
+        [CustomEffectProperty(PropertyType.Float, 11)] public float Contrast { get => _constants.Contrast; set { _constants.Contrast = Math.Clamp(value, .01f, 16f); UpdateConstants(); } }
         [CustomEffectProperty(PropertyType.Float, 12)] public float OutputMode { get => _constants.OutputMode; set { _constants.OutputMode = Math.Clamp(MathF.Round(value), 0f, 2f); UpdateConstants(); } }
         [CustomEffectProperty(PropertyType.Float, 13)] public float DispersionSteps { get => _constants.DispersionSteps; set { _constants.DispersionSteps = Math.Clamp(MathF.Round(value), 3f, 128f); UpdateConstants(); } }
         // Not rounded, like Seed: a continuous frame-equivalent offset, so
         // keyframing it animates the swirl's starting point smoothly
         // instead of stepping in whole-frame jumps.
-        [CustomEffectProperty(PropertyType.Float, 14)] public float PhaseOffset { get => _constants.PhaseOffset; set { _constants.PhaseOffset = value; UpdateConstants(); } }
+        [CustomEffectProperty(PropertyType.Float, 14)] public float PhaseOffset { get => _constants.PhaseOffset; set { _constants.PhaseOffset = Math.Clamp(value, -10000f, 10000f); UpdateConstants(); } }
 
         public Impl() : base(ShaderResourceLoader.Get("FlowDisplace")) { }
 
