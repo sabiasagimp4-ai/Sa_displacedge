@@ -13,10 +13,10 @@ Pipeline (matches ymm/Shaders/EdgeGradient.hlsl + FlowDisplace.hlsl):
      approximates a Gaussian spread of the *raw* gradient field, so nearby
      opposing edges partially cancel instead of doubling a binary mask.
   3. Threshold + contrast gamma on the blurred magnitude gives a soft mask.
-  4. A divergence-free curl-noise field (rotated-octave value-noise fBm),
-     evaluated at time*flow_speed + phase_offset, is blended with the local
-     edge normal by "turbulence" to get a flow direction; scaled by
-     strength * mask gives the displacement vector.
+  4. A divergence-free curl-noise field (the analytic gradient of rotated-
+     octave value-noise fBm), evaluated at time*flow_speed + phase_offset,
+     is blended with the local edge normal by "turbulence" to get a flow
+     direction; scaled by strength * mask gives the displacement vector.
   5. The source is swept dispersion_steps times per pixel along that vector
      (scale ranging over 1 +/- dispersion), each tap weighted by an
      approximate spectral response, for a prism-like fringe; steps=3
@@ -56,21 +56,40 @@ def oklab_l(rgb_linear: np.ndarray) -> np.ndarray:
 # Edge gradient (Scharr) at an adjustable detection scale
 # ---------------------------------------------------------------------------
 
-_SCHARR_X = np.array([[-3, 0, 3], [-10, 0, 10], [-3, 0, 3]], dtype=np.float64) / 16.0
+_SCHARR_X = np.array([[-3, 0, 3], [-10, 0, 10], [-3, 0, 3]], dtype=np.float32) / 16.0
 _SCHARR_Y = _SCHARR_X.T
 
 
-def scharr_gradient(luma: np.ndarray, step: int) -> tuple[np.ndarray, np.ndarray]:
-    step = max(1, int(round(step)))
-    padded = np.pad(luma, step, mode="edge")
-    gx = np.zeros_like(luma)
-    gy = np.zeros_like(luma)
+def _sample_scalar(img: np.ndarray, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """Bilinear sample for a 2-D scalar field with clamp-to-edge."""
+    h, w = img.shape
+    x0 = np.floor(x).astype(np.int32)
+    y0 = np.floor(y).astype(np.int32)
+    x1, y1 = x0 + 1, y0 + 1
+    wx = np.clip(x - x0, 0.0, 1.0)
+    wy = np.clip(y - y0, 0.0, 1.0)
+    x0c, x1c = np.clip(x0, 0, w - 1), np.clip(x1, 0, w - 1)
+    y0c, y1c = np.clip(y0, 0, h - 1), np.clip(y1, 0, h - 1)
+    top = img[y0c, x0c] * (1.0 - wx) + img[y0c, x1c] * wx
+    bot = img[y1c, x0c] * (1.0 - wx) + img[y1c, x1c] * wx
+    return top * (1.0 - wy) + bot * wy
+
+
+def scharr_gradient(luma: np.ndarray, step: float) -> tuple[np.ndarray, np.ndarray]:
+    # Keep the prototype's fractional spacing in the same domain as the HLSL
+    # shader. The old implementation rounded this value to an integer, which
+    # made the lower half of the UI range visually identical.
+    step = max(0.25, float(step))
     h, w = luma.shape
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    gx = np.zeros_like(luma, dtype=np.result_type(luma, np.float32))
+    gy = np.zeros_like(luma, dtype=np.result_type(luma, np.float32))
     for j in range(3):
         for i in range(3):
-            tap = padded[j * step:j * step + h, i * step:i * step + w]
-            gx += _SCHARR_X[j, i] * tap
-            gy += _SCHARR_Y[j, i] * tap
+            if _SCHARR_X[j, i] != 0 or _SCHARR_Y[j, i] != 0:
+                tap = _sample_scalar(luma, xx + (i - 1) * step, yy + (j - 1) * step)
+                gx += _SCHARR_X[j, i] * tap
+                gy += _SCHARR_Y[j, i] * tap
     return gx, gy
 
 
@@ -107,7 +126,8 @@ def gaussian_like_blur(arr: np.ndarray, sigma: float, passes: int = 3) -> np.nda
 
 
 # ---------------------------------------------------------------------------
-# Curl noise: divergence-free flow from a rotated-octave value-noise fBm
+# Curl noise: divergence-free flow from the analytic gradient of a
+# rotated-octave value-noise fBm
 # ---------------------------------------------------------------------------
 
 def _hash2(p: np.ndarray) -> np.ndarray:
@@ -127,14 +147,14 @@ def _value_noise(p: np.ndarray) -> np.ndarray:
     return a * (1 - ux) * (1 - uy) + b * ux * (1 - uy) + c * (1 - ux) * uy + d * ux * uy
 
 
-_OCTAVE_ROT = np.array([[0.8, 0.6], [-0.6, 0.8]])
+_OCTAVE_ROT = np.array([[0.8, 0.6], [-0.6, 0.8]], dtype=np.float32)
 
 
 def fbm(p: np.ndarray, octaves: int) -> np.ndarray:
-    value = np.zeros(p.shape[:-1])
+    value = np.zeros(p.shape[:-1], dtype=np.result_type(p, np.float32))
     amp, freq = 0.5, 1.0
     pp = p
-    for _ in range(max(1, octaves)):
+    for _ in range(max(1, min(8, int(octaves)))):
         value = value + amp * _value_noise(pp * freq)
         pp = pp @ _OCTAVE_ROT.T
         freq *= 2.03
@@ -142,15 +162,51 @@ def fbm(p: np.ndarray, octaves: int) -> np.ndarray:
     return value
 
 
+def _value_noise_gradient(p: np.ndarray) -> np.ndarray:
+    """Analytic gradient of smooth value noise with respect to p=(x,y)."""
+    i = np.floor(p)
+    f = p - i
+    a = _hash2(i)
+    b = _hash2(i + np.array([1.0, 0.0], dtype=p.dtype))
+    c = _hash2(i + np.array([0.0, 1.0], dtype=p.dtype))
+    d = _hash2(i + np.array([1.0, 1.0], dtype=p.dtype))
+    u = f * f * (3.0 - 2.0 * f)
+    du = 6.0 * f * (1.0 - f)
+    x0 = a + (b - a) * u[..., 0]
+    x1 = c + (d - c) * u[..., 0]
+    dvalue_dx = (1.0 - u[..., 1]) * (b - a) + u[..., 1] * (d - c)
+    dvalue_dy = x1 - x0
+    return np.stack([dvalue_dx * du[..., 0], dvalue_dy * du[..., 1]], axis=-1)
+
+
+def fbm_gradient(p: np.ndarray, octaves: int) -> np.ndarray:
+    """Gradient of the rotated-octave fBm with respect to its input p."""
+    grad = np.zeros_like(p, dtype=np.result_type(p, np.float32))
+    pp = p
+    axis_x = np.zeros_like(p, dtype=grad.dtype)
+    axis_y = np.zeros_like(p, dtype=grad.dtype)
+    axis_x[..., 0] = 1.0
+    axis_y[..., 1] = 1.0
+    amp, freq = 0.5, 1.0
+    for _ in range(max(1, min(8, int(octaves)))):
+        grad_q = _value_noise_gradient(pp * freq) * freq
+        grad[..., 0] += amp * np.sum(grad_q * axis_x, axis=-1)
+        grad[..., 1] += amp * np.sum(grad_q * axis_y, axis=-1)
+        pp = pp @ _OCTAVE_ROT.T
+        axis_x = axis_x @ _OCTAVE_ROT.T
+        axis_y = axis_y @ _OCTAVE_ROT.T
+        freq *= 2.03
+        amp *= 0.5
+    return grad
+
+
 def curl_noise(p: np.ndarray, octaves: int, eps: float = 0.5) -> np.ndarray:
-    # v = (d psi/dy, -d psi/dx) for a scalar potential psi = fbm(p): the
-    # *mixed* partials cancel in the divergence (d2psi/dydx == d2psi/dxdy),
-    # which is what makes this field swirl instead of pooling or draining.
-    # Pairing same-axis derivatives instead (an easy mistake) gives the
-    # Laplacian difference, not a divergence-free field.
-    dpsi_dy = (fbm(p + np.array([0.0, eps]), octaves) - fbm(p - np.array([0.0, eps]), octaves)) / (2 * eps)
-    dpsi_dx = (fbm(p + np.array([eps, 0.0]), octaves) - fbm(p - np.array([eps, 0.0]), octaves)) / (2 * eps)
-    return np.stack([dpsi_dy, -dpsi_dx], axis=-1)
+    # v = (d psi/dy, -d psi/dx). Computing the gradient analytically reduces
+    # four full fBm evaluations per pixel to one. The optional eps argument is
+    # retained for API compatibility with older callers; it is no longer used.
+    del eps
+    gradient = fbm_gradient(p, octaves)
+    return np.stack([gradient[..., 1], -gradient[..., 0]], axis=-1)
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +260,7 @@ class Params:
     strength: float = 46.0            # px, max displacement
     turbulence: float = 0.6           # 0-1, blend edge-normal flow -> curl swirl
     turbulence_detail: int = 4        # fBm octaves
-    noise_scale: float = 220.0        # px per noise unit (lower = larger swirls)
+    noise_scale: float = 220.0        # px per noise unit (higher = larger swirls)
     flow_speed: float = 1.0           # animation rate multiplier
     dispersion: float = 0.35          # 0-1, sweep spread around scale 1.0
     dispersion_steps: int = 16        # >=3, taps swept across the spread; 3 == classic R/G/B split
@@ -220,6 +276,7 @@ def render(src: np.ndarray, p: Params, output_mode: str = "composite") -> np.nda
     h, w = src.shape[:2]
     linear = srgb_to_linear(src)
     luma = oklab_l(linear)
+    del linear
 
     gx, gy = scharr_gradient(luma, p.detection_scale)
     mag = np.hypot(gx, gy)
@@ -227,11 +284,16 @@ def render(src: np.ndarray, p: Params, output_mode: str = "composite") -> np.nda
     gx_b = gaussian_like_blur(gx, p.radius)
     gy_b = gaussian_like_blur(gy, p.radius)
     mag_b = gaussian_like_blur(mag, p.radius)
+    del gx, gy, mag
 
     cutoff = (p.threshold / 255.0) * 0.12
     softness = 0.05
     mask = np.clip((mag_b - cutoff) / max(1e-6, softness), 0.0, 1.0)
-    mask = mask ** (1.0 / max(0.1, p.contrast))
+    mask = mask ** (1.0 / max(0.01, p.contrast))
+
+    if output_mode == "mask":
+        gray = mask
+        return np.stack([gray, gray, gray], axis=-1)
 
     inv_mag = np.where(mag_b > 1e-6, 1.0 / mag_b, 0.0)
     edge_normal = np.stack([gx_b * inv_mag, gy_b * inv_mag], axis=-1)
@@ -242,22 +304,25 @@ def render(src: np.ndarray, p: Params, output_mode: str = "composite") -> np.nda
     # spatial coordinate offset, a different pattern entirely), this only
     # moves *where in its cycle* the same pattern currently is.
     anim_time = p.time * p.flow_speed + p.phase_offset
-    yy, xx = np.mgrid[0:h, 0:w].astype(np.float64)
-    coord = np.stack([xx, yy], axis=-1) / p.noise_scale
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    coord = np.stack([xx, yy], axis=-1) / max(1.0, p.noise_scale)
     coord = coord + p.seed * 17.0
     coord[..., 0] += anim_time * 0.35
-    curl = curl_noise(coord, p.turbulence_detail)
-    curl_norm = curl / np.maximum(1e-6, np.hypot(curl[..., 0], curl[..., 1]))[..., None]
+    turb = np.clip(p.turbulence, 0.0, 1.0)
+    irid = np.clip(p.iridescence, 0.0, 1.0)
+    curl = np.zeros_like(coord)
+    if turb > 1e-5 or irid > 1e-5:
+        curl = curl_noise(coord, p.turbulence_detail)
+    curl_len = np.hypot(curl[..., 0], curl[..., 1])
+    curl_norm = curl / np.maximum(1e-6, curl_len)[..., None]
+    curl_norm[curl_len <= 1e-5] = np.array([1.0, 0.0], dtype=curl_norm.dtype)
 
-    flow = edge_normal * (1 - p.turbulence) + curl_norm * p.turbulence
+    flow = edge_normal * (1 - turb) + curl_norm * turb
     flow_len = np.maximum(1e-6, np.hypot(flow[..., 0], flow[..., 1]))
     flow = flow / flow_len[..., None]
 
     disp = flow * (p.strength * mask)[..., None]
 
-    if output_mode == "mask":
-        gray = mask
-        return np.stack([gray, gray, gray], axis=-1)
     if output_mode == "flow":
         vis = np.stack([
             0.5 + 0.5 * flow[..., 0] * mask,
@@ -266,26 +331,29 @@ def render(src: np.ndarray, p: Params, output_mode: str = "composite") -> np.nda
         ], axis=-1)
         return np.clip(vis, 0, 1)
 
+    if p.strength == 0.0 and p.iridescence == 0.0:
+        return src.copy()
+
     # Sweep dispersion_steps taps from scale (1-dispersion) to (1+dispersion)
     # along the displacement vector, each weighted by an approximate
     # spectral response, and blend them into a smoothly graded prism
     # fringe. steps=3 reduces to the classic R/G/B split; more steps trade
     # compute for a smoother, more continuous spectrum.
     steps = max(3, int(round(p.dispersion_steps)))
-    color_sum = np.zeros(src.shape[:2] + (3,))
-    weight_sum = np.zeros(3)
+    color_sum = np.zeros(src.shape[:2] + (3,), dtype=src.dtype)
+    weight_sum = np.zeros(3, dtype=src.dtype)
     for s in range(steps):
         t = s / (steps - 1)
-        scale = 1.0 + p.dispersion * (2.0 * t - 1.0)
+        scale = 1.0 + np.clip(p.dispersion, 0.0, 1.0) * (2.0 * t - 1.0)
         sx = xx + disp[..., 0] * scale
         sy = yy + disp[..., 1] * scale
         tap = bilinear_sample(src, sx, sy)
-        w = spectrum_weight(t)
+        w = spectrum_weight(t).astype(src.dtype, copy=False)
         color_sum += tap * w
         weight_sum += w
     out = color_sum / np.maximum(weight_sum, 1e-5)
 
-    light = np.array([math.cos(math.radians(p.light_angle_deg)), math.sin(math.radians(p.light_angle_deg))])
+    light = np.array([math.cos(math.radians(p.light_angle_deg)), math.sin(math.radians(p.light_angle_deg))], dtype=src.dtype)
     ndotl = edge_normal[..., 0] * light[0] + edge_normal[..., 1] * light[1]
     spec = np.clip(ndotl * 0.5 + 0.5, 0, 1) ** 8
 
@@ -298,7 +366,7 @@ def render(src: np.ndarray, p: Params, output_mode: str = "composite") -> np.nda
 
 def load_image(path: Path) -> np.ndarray:
     img = Image.open(path).convert("RGB")
-    return np.asarray(img).astype(np.float64) / 255.0
+    return np.asarray(img).astype(np.float32) / 255.0
 
 
 def save_image(arr: np.ndarray, path: Path) -> None:
