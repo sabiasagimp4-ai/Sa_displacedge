@@ -245,6 +245,21 @@ def bilinear_sample(img: np.ndarray, x: np.ndarray, y: np.ndarray) -> np.ndarray
     return top * (1 - wy) + bot * wy
 
 
+def reflect_bilinear_sample(img: np.ndarray, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """Bilinear sample with the reflected border used by S_DistortChroma."""
+    h, w = img.shape[:2]
+
+    def reflect(coord: np.ndarray, extent: int) -> np.ndarray:
+        if extent <= 1:
+            return np.zeros_like(coord)
+        span = float(extent - 1)
+        period = 2.0 * span
+        folded = np.mod(coord, period)
+        return np.minimum(folded, period - folded)
+
+    return bilinear_sample(img, reflect(x, w), reflect(y, h))
+
+
 def iridescent_palette(t: np.ndarray) -> np.ndarray:
     freq = np.array([1.0, 1.0, 1.0])
     phase = np.array([0.0, 0.33, 0.67])
@@ -308,8 +323,11 @@ class Params:
     turbulence_detail: int = 4        # fBm octaves
     noise_scale: float = 220.0        # px per noise unit (higher = larger swirls)
     flow_speed: float = 1.0           # animation rate multiplier
-    dispersion: float = 0.35          # 0-1, sweep spread around scale 1.0
+    dispersion: float = 0.35          # 0-8, chroma amount around the flow displacement
     dispersion_steps: int = 16        # >=3, taps swept across the spread; 3 == classic R/G/B split
+    warp_red: float = 0.5             # S_DistortChroma-style red-end warp ratio
+    warp_blue: float = 1.0            # S_DistortChroma-style blue-end warp ratio
+    warp_rotation_deg: float = 0.0    # rotate the lens-gradient chroma direction
     fast_sampling: bool = False       # approximate maximum-eight-tap mode
     iridescence: float = 0.55         # 0-1, glint colour strength
     light_angle_deg: float = 55.0
@@ -383,6 +401,14 @@ def render(src: np.ndarray, p: Params, output_mode: str = "composite") -> np.nda
     flow = flow / flow_len[..., None]
 
     disp = flow * (p.strength * mask)[..., None]
+    angle = math.radians(p.warp_rotation_deg)
+    cos_a, sin_a = math.cos(angle), math.sin(angle)
+    chroma_direction = np.stack([
+        edge_normal[..., 0] * cos_a - edge_normal[..., 1] * sin_a,
+        edge_normal[..., 0] * sin_a + edge_normal[..., 1] * cos_a,
+    ], axis=-1)
+    chroma_disp = chroma_direction * (p.strength * mask)[..., None]
+    base_position = np.stack([xx, yy], axis=-1) + disp
 
     if output_mode == "flow":
         vis = np.stack([
@@ -396,24 +422,25 @@ def render(src: np.ndarray, p: Params, output_mode: str = "composite") -> np.nda
     # them before spectral gathers allocate their temporary RGB buffers.
     del coord, curl_len, curl_norm, flow, flow_len, gx_b, gy_b, inv_mag, luma
 
-    # Sweep dispersion_steps taps from scale (1-dispersion) to (1+dispersion)
-    # along the displacement vector, each weighted by an approximate
-    # spectral response, and blend them into a smoothly graded prism
-    # fringe. steps=3 reduces to the classic R/G/B split; more steps trade
-    # compute for a smoother, more continuous spectrum.
+    # S_DistortChroma-style sweep: the flow gives the base displacement and
+    # the blurred edge gradient gives an independent chroma direction. Red
+    # and blue receive signed end-point warp ratios; the middle stays at the
+    # base position. Reflected borders avoid a flat smear at high gains.
     table = spectral_table(int(round(p.dispersion_steps)), p.fast_sampling)
     dense = active.all()
     if dense:
-        sample_x, sample_y, displacement = xx, yy, disp
+        sample_x, sample_y = xx, yy
+        base, chroma = base_position, chroma_disp
         color_sum = np.zeros_like(src)
     else:
-        sample_x, sample_y, displacement = xx[active], yy[active], disp[active]
+        sample_x, sample_y = xx[active], yy[active]
+        base, chroma = base_position[active], chroma_disp[active]
         color_sum = np.zeros((np.count_nonzero(active), 3), dtype=src.dtype)
     for row in table:
-        scale = 1.0 + np.clip(p.dispersion, 0.0, 1.0) * row[3]
-        sx = sample_x + displacement[..., 0] * scale
-        sy = sample_y + displacement[..., 1] * scale
-        tap = bilinear_sample(src, sx, sy)
+        t = np.clip(0.5 + 0.5 * row[3], 0.0, 1.0)
+        signed_warp = (1.0 - t) * (-p.warp_blue) + t * p.warp_red
+        sample = base + chroma * (np.clip(p.dispersion, 0.0, 8.0) * signed_warp)[..., None]
+        tap = reflect_bilinear_sample(src, sample[..., 0], sample[..., 1])
         color_sum += tap * row[:3]
     if dense:
         out = color_sum
@@ -453,6 +480,9 @@ def main() -> None:
     ap.add_argument("--radius", type=float, default=Params.radius)
     ap.add_argument("--dispersion", type=float, default=Params.dispersion)
     ap.add_argument("--dispersion-steps", type=int, default=Params.dispersion_steps)
+    ap.add_argument("--warp-red", type=float, default=Params.warp_red)
+    ap.add_argument("--warp-blue", type=float, default=Params.warp_blue)
+    ap.add_argument("--warp-rotation", type=float, default=Params.warp_rotation_deg)
     ap.add_argument("--fast-sampling", action="store_true")
     ap.add_argument("--iridescence", type=float, default=Params.iridescence)
     ap.add_argument("--seed", type=float, default=Params.seed)
@@ -464,6 +494,8 @@ def main() -> None:
     params = Params(
         strength=args.strength, turbulence=args.turbulence, radius=args.radius,
         dispersion=args.dispersion, dispersion_steps=args.dispersion_steps,
+        warp_red=args.warp_red, warp_blue=args.warp_blue,
+        warp_rotation_deg=args.warp_rotation,
         iridescence=args.iridescence, seed=args.seed, time=args.time,
         phase_offset=args.phase_offset, fast_sampling=args.fast_sampling,
     )

@@ -33,6 +33,12 @@ internal sealed class FlowDisplaceEffect(IGraphicsDevicesAndContext devices)
 
     public float FastSampling { set => SetValue(15, value); }
 
+    // S_DistortChroma-compatible controls. Values are normalized ratios in
+    // the shader (the YMM UI exposes them as percentages/degrees).
+    public float WarpRed { set => SetValue(16, value); }
+    public float WarpBlue { set => SetValue(17, value); }
+    public float WarpRotation { set => SetValue(18, value); }
+
     [CustomEffect(2)]
     private sealed class Impl : D2D1CustomShaderEffectImplBase<Impl>
     {
@@ -48,6 +54,8 @@ internal sealed class FlowDisplaceEffect(IGraphicsDevicesAndContext devices)
             LightAngle = 55f,
             Contrast = 1f,
             DispersionSteps = 16f,
+            WarpRed = .5f,
+            WarpBlue = 1f,
         };
 
         [CustomEffectProperty(PropertyType.Float, 0)] public float Strength { get => _constants.Strength; set { _constants.Strength = Math.Clamp(value, 0f, 400f); UpdateConstants(); } }
@@ -56,7 +64,7 @@ internal sealed class FlowDisplaceEffect(IGraphicsDevicesAndContext devices)
         [CustomEffectProperty(PropertyType.Float, 3)] public float NoiseScale { get => _constants.NoiseScale; set { _constants.NoiseScale = Math.Clamp(value, 8f, 4000f); UpdateConstants(); } }
         [CustomEffectProperty(PropertyType.Float, 4)] public float FlowSpeed { get => _constants.FlowSpeed; set { _constants.FlowSpeed = Math.Clamp(value, 0f, 10f); UpdateConstants(); } }
         [CustomEffectProperty(PropertyType.Float, 5)] public float Time { get => _constants.Time; set { _constants.Time = value; UpdateConstants(); } }
-        [CustomEffectProperty(PropertyType.Float, 6)] public float Dispersion { get => _constants.Dispersion; set { _constants.Dispersion = Math.Clamp(value, 0f, 1f); UpdateConstants(); } }
+        [CustomEffectProperty(PropertyType.Float, 6)] public float Dispersion { get => _constants.Dispersion; set { _constants.Dispersion = Math.Clamp(value, 0f, 8f); UpdateConstants(); } }
         [CustomEffectProperty(PropertyType.Float, 7)] public float Iridescence { get => _constants.Iridescence; set { _constants.Iridescence = Math.Clamp(value, 0f, 1f); UpdateConstants(); } }
         [CustomEffectProperty(PropertyType.Float, 8)] public float LightAngle { get => _constants.LightAngle; set { _constants.LightAngle = Math.Clamp(value, -180f, 180f); UpdateConstants(); } }
         [CustomEffectProperty(PropertyType.Float, 9)] public float Seed { get => _constants.Seed; set { _constants.Seed = Math.Clamp(value, -4096f, 4096f); UpdateConstants(); } }
@@ -75,6 +83,13 @@ internal sealed class FlowDisplaceEffect(IGraphicsDevicesAndContext devices)
         [CustomEffectProperty(PropertyType.Float, 15)]
         public float FastSampling { get => _fastSampling; set { _fastSampling = value; UpdateConstants(); } }
 
+        [CustomEffectProperty(PropertyType.Float, 16)]
+        public float WarpRed { get => _constants.WarpRed; set { _constants.WarpRed = Math.Clamp(value, -8f, 8f); UpdateConstants(); } }
+        [CustomEffectProperty(PropertyType.Float, 17)]
+        public float WarpBlue { get => _constants.WarpBlue; set { _constants.WarpBlue = Math.Clamp(value, -8f, 8f); UpdateConstants(); } }
+        [CustomEffectProperty(PropertyType.Float, 18)]
+        public float WarpRotation { get => _constants.WarpRotation; set { _constants.WarpRotation = Math.Clamp(value, -180f, 180f); UpdateConstants(); } }
+
         public Impl() : base(ShaderResourceLoader.Get("FlowDisplace")) { }
 
         protected override void UpdateConstants()
@@ -91,6 +106,9 @@ internal sealed class FlowDisplaceEffect(IGraphicsDevicesAndContext devices)
             float angle = _constants.LightAngle * (MathF.PI / 180f);
             _constants.LightX = MathF.Cos(angle);
             _constants.LightY = MathF.Sin(angle);
+            float chromaAngle = _constants.WarpRotation * (MathF.PI / 180f);
+            _constants.WarpCos = MathF.Cos(chromaAngle);
+            _constants.WarpSin = MathF.Sin(chromaAngle);
             _constants.Cutoff = _constants.Threshold / 255f * .12f;
             _constants.InvContrast = 1f / MathF.Max(.01f, _constants.Contrast);
             drawInformation?.SetOutputBuffer(BufferPrecision.PerChannel32Float, ChannelDepth.Four);
@@ -108,10 +126,11 @@ internal sealed class FlowDisplaceEffect(IGraphicsDevicesAndContext devices)
 
         public override void MapOutputRectToInputRects(RawRect outputRect, RawRect[] inputRects)
         {
-            // Worst-case displacement magnitude: Strength scaled up to
-            // (1 + Dispersion) by the outer/inner dispersion taps.
+            // Worst-case displacement magnitude: the base flow displacement
+            // plus the larger S_DistortChroma-style red/blue warp.
             bool displaces = _constants.OutputMode < .5f && _constants.Dispersion > 1e-5f && _constants.Strength > 0f;
-            int halo = displaces ? (int)MathF.Ceiling(_constants.Strength * (1f + _constants.Dispersion)) + 1 : 0;
+            float chromaWarp = MathF.Max(MathF.Abs(_constants.WarpRed), MathF.Abs(_constants.WarpBlue));
+            int halo = displaces ? (int)MathF.Ceiling(_constants.Strength * (1f + _constants.Dispersion * chromaWarp)) + 1 : 0;
             inputRects[0] = new(outputRect.Left - halo, outputRect.Top - halo, outputRect.Right + halo, outputRect.Bottom + halo);
             inputRects[1] = outputRect;
         }
@@ -125,6 +144,7 @@ internal sealed class FlowDisplaceEffect(IGraphicsDevicesAndContext devices)
             public float OutputMode, DispersionSteps, PhaseOffset, TapCount;
             public float Left, Top, Right, Bottom;
             public float LightX, LightY, Cutoff, InvContrast;
+            public float WarpRed, WarpBlue, WarpCos, WarpSin;
             public SpectralTable.Buffer Taps;
         }
     }

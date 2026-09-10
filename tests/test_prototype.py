@@ -95,6 +95,13 @@ class BilinearSample(unittest.TestCase):
         sampled = preview.bilinear_sample(img, np.array([-5.0]), np.array([-5.0]))
         np.testing.assert_allclose(sampled[0], [1, 0, 0])
 
+    def test_reflects_outside_bounds(self):
+        img = np.arange(4 * 4 * 3, dtype=np.float64).reshape(4, 4, 3)
+        np.testing.assert_allclose(
+            preview.reflect_bilinear_sample(img, np.array([-1.0]), np.array([1.0]))[0],
+            img[1, 1],
+        )
+
 
 class IridescentPalette(unittest.TestCase):
     def test_output_is_in_unit_range(self):
@@ -157,6 +164,14 @@ class RenderContract(unittest.TestCase):
             self.assertTrue(np.all(np.isfinite(out)))
             self.assertGreaterEqual(out.min(), -1e-6)
             self.assertLessEqual(out.max(), 1.0 + 1e-6)
+
+    def test_s_distort_chroma_controls_change_the_render(self):
+        rng = np.random.default_rng(15)
+        src = rng.random((24, 24, 3))
+        base = preview.render(src, preview.Params(dispersion=2.0, warp_red=.5, warp_blue=1.0))
+        rotated = preview.render(src, preview.Params(dispersion=2.0, warp_red=3.0, warp_blue=-2.0, warp_rotation_deg=90))
+        self.assertTrue(np.isfinite(rotated).all())
+        self.assertGreater(float(np.mean(np.abs(rotated - base))), 1e-4)
 
     def test_more_steps_converges_to_a_stable_result(self):
         # As dispersion_steps grows the tap sweep is a finer quadrature of

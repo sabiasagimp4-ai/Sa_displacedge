@@ -24,6 +24,9 @@ internal sealed class SaDisplacedgeProcessor : IVideoEffectProcessor
     private float _lastTime = float.NaN;
     private float _lastDispersion = float.NaN;
     private float _lastDispersionSteps = float.NaN;
+    private float _lastWarpRed = float.NaN;
+    private float _lastWarpBlue = float.NaN;
+    private float _lastWarpRotation = float.NaN;
     private float _lastIridescence = float.NaN;
     private float _lastLightAngle = float.NaN;
     private float _lastSeed = float.NaN;
@@ -133,11 +136,20 @@ internal sealed class SaDisplacedgeProcessor : IVideoEffectProcessor
         float time = (float)frame;
         if (time != _lastTime) { _flow.Time = time; _lastTime = time; }
 
-        float dispersion = (float)(_item.Dispersion.GetValue(frame, length, fps) / 100.0);
+        float dispersion = Math.Clamp((float)(_item.Dispersion.GetValue(frame, length, fps) / 100.0), 0f, 8f);
         if (dispersion != _lastDispersion) { _flow.Dispersion = dispersion; _lastDispersion = dispersion; }
 
         float dispersionSteps = (float)_item.DispersionSteps.GetValue(frame, length, fps);
         if (dispersionSteps != _lastDispersionSteps) { _flow.DispersionSteps = dispersionSteps; _lastDispersionSteps = dispersionSteps; }
+
+        float warpRed = (float)(_item.WarpRed.GetValue(frame, length, fps) / 100.0);
+        if (warpRed != _lastWarpRed) { _flow.WarpRed = warpRed; _lastWarpRed = warpRed; }
+
+        float warpBlue = (float)(_item.WarpBlue.GetValue(frame, length, fps) / 100.0);
+        if (warpBlue != _lastWarpBlue) { _flow.WarpBlue = warpBlue; _lastWarpBlue = warpBlue; }
+
+        float warpRotation = (float)_item.WarpRotation.GetValue(frame, length, fps);
+        if (warpRotation != _lastWarpRotation) { _flow.WarpRotation = warpRotation; _lastWarpRotation = warpRotation; }
 
         float iridescence = (float)(_item.Iridescence.GetValue(frame, length, fps) / 100.0);
         if (iridescence != _lastIridescence) { _flow.Iridescence = iridescence; _lastIridescence = iridescence; }

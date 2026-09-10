@@ -29,6 +29,7 @@ float phaseOffset;
 float tapCount;
 float4 inputBounds;
 float4 lightAndMask; // light direction xy, cutoff, reciprocal contrast
+float4 chromaControls; // red warp, blue warp, cos(rotation), sin(rotation)
 float4 spectralTaps[128]; // normalized RGB weight, signed sweep position
 
 D2D_PS_ENTRY(main)
@@ -104,12 +105,24 @@ D2D_PS_ENTRY(main)
     if (outputMode > .5)
         return float4(.5 + .5 * flow.x * mask, .5 + .5 * flow.y * mask, mask, 1);
 
-    // Sweep dispersionSteps taps from scale (1-dispersion) to (1+dispersion)
-    // along the displacement vector, each weighted by an approximate
-    // spectral response (SpectrumWeight), and blend them into a smoothly
-    // graded prism fringe. 3 steps reduces to the classic R/G/B split;
-    // more steps trade GPU time for a smoother, more continuous spectrum.
-    float d = saturate(dispersion);
+    // Sweep dispersionSteps taps along the edge-gradient direction, like
+    // S_DistortChroma: the source is first displaced by the creative flow,
+    // then red/blue wavelengths receive different signed warp amounts. The
+    // middle of the spectrum stays at the base position, while the ends are
+    // controlled independently by WarpRed/WarpBlue.
+    // Dispersion is intentionally allowed above 1.0. The UI expresses this
+    // as 0%..800%; it increases the RGB separation while keeping Strength
+    // as the base flow displacement. Clamping here protects animated values
+    // or old hosts that bypass the UI range.
+    float d = clamp(dispersion, 0.0, 8.0);
+    float2 rotate = chromaControls.zw;
+    float2 chromaDirection = float2(
+        edgeNormal.x * rotate.x - edgeNormal.y * rotate.y,
+        edgeNormal.x * rotate.y + edgeNormal.y * rotate.x);
+    float2 chromaDisp = chromaDirection * (strength * mask);
+    float redWarp = chromaControls.x;
+    float blueWarp = chromaControls.y;
+    float2 basePosition = p + disp;
     float3 rgb;
     if (d <= 1e-5 || strength <= 0)
     {
@@ -124,8 +137,9 @@ D2D_PS_ENTRY(main)
         for (int s = 0; s < steps; ++s)
         {
             float4 spectral = spectralTaps[s];
-            float scale = 1 + d * spectral.w;
-            float2 samplePosition = clamp(p + disp * scale, inputBounds.xy, inputBounds.zw - 1);
+            float t = saturate(.5 + .5 * spectral.w);
+            float signedWarp = lerp(-blueWarp, redWarp, t);
+            float2 samplePosition = ReflectSamplePosition(basePosition + chromaDisp * (d * signedWarp), inputBounds);
             float4 c = InputTexture0.SampleLevel(InputSampler0, uv.xy + uv.zw * (samplePosition - p), 0);
             float a = saturate(c.a);
             float3 tap = a > 0 ? c.rgb / a : 0;

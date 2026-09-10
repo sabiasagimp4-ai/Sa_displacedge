@@ -48,36 +48,48 @@ public sealed class SaDisplacedgeEffect : VideoEffectBase
     [AnimationSlider("F1", "%", 0, 1000)]
     public Animation FlowSpeed { get; } = new(100, 0, 1000);
 
-    [Display(Name = "色収差", Description = "変位方向に沿ってRGBをずらし、プリズムのような縁取りを作ります", Order = 9)]
-    [AnimationSlider("F1", "%", 0, 100)]
-    public Animation Dispersion { get; } = new(35, 0, 100);
+    [Display(Name = "色収差", Description = "変位とは独立してRGBの分離距離を広げます。100%超で強い色ズレ", Order = 9)]
+    [AnimationSlider("F1", "%", 0, 800)]
+    public Animation Dispersion { get; } = new(35, 0, 800);
 
     [Display(Name = "色収差ステップ数", Description = "色収差のサンプリング回数。3で従来通りのRGB分離、大きいほど滑らかな虹のグラデーションになりますが計算量が増えます", Order = 10)]
     [AnimationSlider("F0", "", 3, 128)]
     public Animation DispersionSteps { get; } = new(16, 3, 128);
 
-    [Display(Name = "虹色の強さ", Description = "変位の頂点に薄膜干渉風の虹色ハイライトを重ねます", Order = 11)]
+    [Display(Name = "赤ワープ", Description = "S_DistortChroma互換。赤側スペクトルのワープ量。負値で方向反転", Order = 11)]
+    [AnimationSlider("F1", "%", -800, 800)]
+    public Animation WarpRed { get; } = new(50, -800, 800);
+
+    [Display(Name = "青ワープ", Description = "S_DistortChroma互換。青側スペクトルのワープ量。負値で方向反転", Order = 12)]
+    [AnimationSlider("F1", "%", -800, 800)]
+    public Animation WarpBlue { get; } = new(100, -800, 800);
+
+    [Display(Name = "色収差方向", Description = "レンズ勾配に対する色収差方向の回転", Order = 13)]
+    [AnimationSlider("F1", "°", -180, 180)]
+    public Animation WarpRotation { get; } = new(0, -180, 180);
+
+    [Display(Name = "虹色の強さ", Description = "変位の頂点に薄膜干渉風の虹色ハイライトを重ねます", Order = 14)]
     [AnimationSlider("F1", "%", 0, 100)]
     public Animation Iridescence { get; } = new(55, 0, 100);
 
-    [Display(Name = "光の角度", Description = "虹色ハイライトが最も強くなる向き", Order = 12)]
+    [Display(Name = "光の角度", Description = "虹色ハイライトが最も強くなる向き", Order = 15)]
     [AnimationSlider("F1", "°", -180, 180)]
     public Animation LightAngle { get; } = new(55, -180, 180);
 
-    [Display(Name = "シード", Description = "渦模様のパターンを変える乱数の種", Order = 13)]
+    [Display(Name = "シード", Description = "渦模様のパターンを変える乱数の種", Order = 16)]
     [AnimationSlider("F0", "", -4096, 4096)]
     public Animation Seed { get; } = new(0, -4096, 4096);
 
-    [Display(Name = "位相", Description = "渦アニメーションの開始位置をずらします。流速とは独立で、タイムラインを動かさずに模様を変えられます", Order = 14)]
+    [Display(Name = "位相", Description = "渦アニメーションの開始位置をずらします。流速とは独立で、タイムラインを動かさずに模様を変えられます", Order = 17)]
     [AnimationSlider("F0", "", -10000, 10000)]
     public Animation Phase { get; } = new(0, -10000, 10000);
 
-    [Display(Name = "出力", Description = "変位フィールドの向きや強さマスクを直接確認できます", Order = 15)]
+    [Display(Name = "出力", Description = "変位フィールドの向きや強さマスクを直接確認できます", Order = 18)]
     [EnumComboBox]
     public SaDisplacedgeOutputMode OutputMode { get => _outputMode; set => Set(ref _outputMode, value); }
     private SaDisplacedgeOutputMode _outputMode = SaDisplacedgeOutputMode.Composite;
 
-    [Display(Name = "色収差の品質", Description = "軽量は最大8サンプルに集約。細かい模様や強い色収差では差が出ます", Order = 16)]
+    [Display(Name = "色収差の品質", Description = "軽量は最大8サンプルに集約。細かい模様や強い色収差では差が出ます", Order = 19)]
     [EnumComboBox]
     public SaDisplacedgeSamplingQuality SamplingQuality { get => _samplingQuality; set => Set(ref _samplingQuality, value); }
     private SaDisplacedgeSamplingQuality _samplingQuality = SaDisplacedgeSamplingQuality.Standard;
@@ -89,7 +101,10 @@ public sealed class SaDisplacedgeEffect : VideoEffectBase
     protected override IEnumerable<IAnimatable> GetAnimatables() =>
     [
         DetectionScale, Threshold, Contrast, Radius, Strength, Turbulence, TurbulenceDetail,
+        // Keep the original animatable order intact for existing YMM4 items;
+        // the S_DistortChroma controls are appended for serialization safety.
         SwirlSize, FlowSpeed, Dispersion, DispersionSteps, Iridescence, LightAngle, Seed, Phase,
+        WarpRed, WarpBlue, WarpRotation,
     ];
 }
 

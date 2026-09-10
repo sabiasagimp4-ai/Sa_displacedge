@@ -24,3 +24,11 @@ class Sampling(unittest.TestCase):
         self.assertTrue(np.isfinite(a).all())
         self.assertTrue((a >= 0).all() and (a <= 1).all())
         np.testing.assert_array_equal(a, b)
+
+    def test_high_dispersion_is_supported(self):
+        src = np.random.default_rng(9).random((32, 40, 3), dtype=np.float32)
+        low = render(src, Params(strength=6, dispersion=.35, dispersion_steps=24))
+        high = render(src, Params(strength=6, dispersion=8.0, dispersion_steps=24))
+        self.assertTrue(np.isfinite(high).all())
+        self.assertTrue((high >= 0).all() and (high <= 1).all())
+        self.assertGreater(float(np.mean(np.abs(high - low))), 1e-4)
