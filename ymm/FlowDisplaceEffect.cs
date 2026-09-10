@@ -145,8 +145,10 @@ internal sealed class FlowDisplaceEffect(IGraphicsDevicesAndContext devices)
             public float OutputMode, DispersionSteps, PhaseOffset, TapCount;
             public float Left, Top, Right, Bottom;
             public float LightX, LightY, Cutoff, InvContrast;
-            public float WarpRed, WarpBlue, WarpCos, WarpSin;
             public SpectralTable.Buffer Taps;
+            // Keep the long-lived spectral table at its original byte offset;
+            // the chroma controls are appended after it for shader ABI safety.
+            public float WarpRed, WarpBlue, WarpCos, WarpSin;
         }
     }
 }

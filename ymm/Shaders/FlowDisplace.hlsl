@@ -29,8 +29,10 @@ float phaseOffset;
 float tapCount;
 float4 inputBounds;
 float4 lightAndMask; // light direction xy, cutoff, reciprocal contrast
-float4 chromaControls; // red warp, blue warp, cos(rotation), sin(rotation)
 float4 spectralTaps[128]; // normalized RGB weight, signed sweep position
+// Appended after the spectral table to preserve the existing constant-buffer
+// ABI used by the shader layout verifier.
+float4 chromaControls; // red warp, blue warp, cos(rotation), sin(rotation)
 
 D2D_PS_ENTRY(main)
 {
