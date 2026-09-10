@@ -78,6 +78,7 @@ internal sealed class FlowDisplaceEffect(IGraphicsDevicesAndContext devices)
         [CustomEffectProperty(PropertyType.Float, 14)] public float PhaseOffset { get => _constants.PhaseOffset; set { _constants.PhaseOffset = Math.Clamp(value, -10000f, 10000f); UpdateConstants(); } }
 
         private float _fastSampling;
+        private float _warpRotation;
         private int _tableSteps = -1;
         private bool _tableFast;
         [CustomEffectProperty(PropertyType.Float, 15)]
@@ -88,7 +89,7 @@ internal sealed class FlowDisplaceEffect(IGraphicsDevicesAndContext devices)
         [CustomEffectProperty(PropertyType.Float, 17)]
         public float WarpBlue { get => _constants.WarpBlue; set { _constants.WarpBlue = Math.Clamp(value, -8f, 8f); UpdateConstants(); } }
         [CustomEffectProperty(PropertyType.Float, 18)]
-        public float WarpRotation { get => _constants.WarpRotation; set { _constants.WarpRotation = Math.Clamp(value, -180f, 180f); UpdateConstants(); } }
+        public float WarpRotation { get => _warpRotation; set { _warpRotation = Math.Clamp(value, -180f, 180f); UpdateConstants(); } }
 
         public Impl() : base(ShaderResourceLoader.Get("FlowDisplace")) { }
 
@@ -106,7 +107,7 @@ internal sealed class FlowDisplaceEffect(IGraphicsDevicesAndContext devices)
             float angle = _constants.LightAngle * (MathF.PI / 180f);
             _constants.LightX = MathF.Cos(angle);
             _constants.LightY = MathF.Sin(angle);
-            float chromaAngle = _constants.WarpRotation * (MathF.PI / 180f);
+            float chromaAngle = _warpRotation * (MathF.PI / 180f);
             _constants.WarpCos = MathF.Cos(chromaAngle);
             _constants.WarpSin = MathF.Sin(chromaAngle);
             _constants.Cutoff = _constants.Threshold / 255f * .12f;
