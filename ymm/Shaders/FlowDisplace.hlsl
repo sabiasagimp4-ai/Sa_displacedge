@@ -26,8 +26,13 @@ float contrast;
 float outputMode;
 float dispersionSteps;
 float phaseOffset;
-float padding2;
+float tapCount;
 float4 inputBounds;
+float4 lightAndMask; // light direction xy, cutoff, reciprocal contrast
+float4 spectralTaps[128]; // normalized RGB weight, signed sweep position
+// Appended after the spectral table to preserve the existing constant-buffer
+// ABI used by the shader layout verifier.
+float4 chromaControls; // red warp, blue warp, cos(rotation), sin(rotation)
 
 D2D_PS_ENTRY(main)
 {
@@ -40,17 +45,34 @@ D2D_PS_ENTRY(main)
     float2 gradient = weight > 1e-5 ? field.rg / weight : 0;
     float magnitude = weight > 1e-5 ? field.b / weight : 0;
 
-    float cutoff = saturate(threshold / 255.0) * .12;
+    float cutoff = lightAndMask.z;
     float mask = saturate((magnitude - cutoff) / .05);
-    mask = pow(mask, 1.0 / max(.01, contrast));
+    mask = pow(mask, lightAndMask.w);
 
     // The mask visualization does not need the flow field at all.
     if (outputMode > 1.5)
         return float4(mask, mask, mask, 1);
 
-    float4 source = D2DSampleInputAtPosition(0, p);
-    if (outputMode < .5 && (mask <= 0 || source.a <= 0))
-        return source;
+    float4 source = 0;
+    if (outputMode < .5)
+    {
+        source = D2DSampleInputAtPosition(0, p);
+        if (mask <= 0 || source.a <= 0)
+            return source;
+    }
+
+    // No flow direction can affect a zero-mask diagnostic pixel.
+    if (mask <= 0)
+        return float4(.5, .5, 0, 1);
+
+    // Dispersion=0 follows the existing pass-through behaviour. Without
+    // glint, neither gradient normalization nor curl can affect the result.
+    if (outputMode < .5 && iridescence <= 1e-5 && (dispersion <= 1e-5 || strength <= 0))
+    {
+        float alpha = saturate(source.a);
+        float3 rgb = source.a > 0 ? source.rgb / source.a : 0;
+        return float4(saturate(rgb) * alpha, alpha);
+    }
 
     float invMag = magnitude > 1e-5 ? 1.0 / magnitude : 0;
     float2 edgeNormal = gradient * invMag;
@@ -69,7 +91,7 @@ D2D_PS_ENTRY(main)
     float irid = saturate(iridescence);
     float2 curl = 0;
     float2 curlDir = float2(1, 0);
-    if (turb > 1e-5 || irid > 1e-5)
+    if (turb > 1e-5 || (outputMode < .5 && irid > 1e-5))
     {
         curl = CurlNoise(coord, octaves);
         float curlLen = length(curl);
@@ -85,42 +107,53 @@ D2D_PS_ENTRY(main)
     if (outputMode > .5)
         return float4(.5 + .5 * flow.x * mask, .5 + .5 * flow.y * mask, mask, 1);
 
-    // Sweep dispersionSteps taps from scale (1-dispersion) to (1+dispersion)
-    // along the displacement vector, each weighted by an approximate
-    // spectral response (SpectrumWeight), and blend them into a smoothly
-    // graded prism fringe. 3 steps reduces to the classic R/G/B split;
-    // more steps trade GPU time for a smoother, more continuous spectrum.
-    float d = saturate(dispersion);
+    // Sweep dispersionSteps taps along the edge-gradient direction, like
+    // S_DistortChroma: the source is first displaced by the creative flow,
+    // then red/blue wavelengths receive different signed warp amounts. The
+    // middle of the spectrum stays at the base position, while the ends are
+    // controlled independently by WarpRed/WarpBlue.
+    // Dispersion is intentionally allowed above 1.0. The UI expresses this
+    // as 0%..800%; it increases the RGB separation while keeping Strength
+    // as the base flow displacement. Clamping here protects animated values
+    // or old hosts that bypass the UI range.
+    float d = clamp(dispersion, 0.0, 8.0);
+    float2 rotate = chromaControls.zw;
+    float2 chromaDirection = float2(
+        edgeNormal.x * rotate.x - edgeNormal.y * rotate.y,
+        edgeNormal.x * rotate.y + edgeNormal.y * rotate.x);
+    float2 chromaDisp = chromaDirection * (strength * mask);
+    float redWarp = chromaControls.x;
+    float blueWarp = chromaControls.y;
+    float2 basePosition = p + disp;
     float3 rgb;
-    if (d <= 1e-5)
+    if (d <= 1e-5 || strength <= 0)
     {
         rgb = source.a > 0 ? source.rgb / source.a : 0;
     }
     else
     {
         float4 uv = D2DGetInputCoordinate(0);
-        int steps = (int) clamp(round(dispersionSteps), 3, 128);
-        float3 colorSum = 0, weightSum = 0;
+        int steps = (int)tapCount;
+        float3 colorSum = 0;
         [loop]
         for (int s = 0; s < steps; ++s)
         {
-            float t = (float) s / (float) (steps - 1);
-            float scale = 1 + d * (2 * t - 1);
-            float2 samplePosition = clamp(p + disp * scale, inputBounds.xy, inputBounds.zw - 1);
+            float4 spectral = spectralTaps[s];
+            float t = saturate(.5 + .5 * spectral.w);
+            float signedWarp = lerp(-blueWarp, redWarp, t);
+            float2 samplePosition = ReflectSamplePosition(basePosition + chromaDisp * (d * signedWarp), inputBounds);
             float4 c = InputTexture0.SampleLevel(InputSampler0, uv.xy + uv.zw * (samplePosition - p), 0);
             float a = saturate(c.a);
             float3 tap = a > 0 ? c.rgb / a : 0;
-            float3 w = SpectrumWeight(t);
-            colorSum += tap * w;
-            weightSum += w;
+            colorSum += tap * spectral.rgb;
         }
-        rgb = colorSum / max(weightSum, 1e-5);
+        rgb = colorSum;
     }
 
     float3 glint = 0;
     if (irid > 1e-5)
     {
-        float2 lightDir = float2(cos(radians(lightAngle)), sin(radians(lightAngle)));
+        float2 lightDir = lightAndMask.xy;
         float ndotl = saturate(dot(edgeNormal, lightDir) * .5 + .5);
         float spec = pow(ndotl, 8);
         float phase = magnitude * 10 + animTime * .05 + curl.x * .6;

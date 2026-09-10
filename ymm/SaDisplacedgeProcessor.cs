@@ -24,12 +24,17 @@ internal sealed class SaDisplacedgeProcessor : IVideoEffectProcessor
     private float _lastTime = float.NaN;
     private float _lastDispersion = float.NaN;
     private float _lastDispersionSteps = float.NaN;
+    private float _lastWarpRed = float.NaN;
+    private float _lastWarpBlue = float.NaN;
+    private float _lastWarpRotation = float.NaN;
     private float _lastIridescence = float.NaN;
     private float _lastLightAngle = float.NaN;
     private float _lastSeed = float.NaN;
     private float _lastPhaseOffset = float.NaN;
     private float _lastThreshold = float.NaN;
     private float _lastContrast = float.NaN;
+    private float _lastSamplingQuality = float.NaN;
+    private bool _identity;
     private float _lastOutputMode = float.NaN;
 
     public SaDisplacedgeProcessor(IGraphicsDevicesAndContext devices, SaDisplacedgeEffect item)
@@ -68,7 +73,7 @@ internal sealed class SaDisplacedgeProcessor : IVideoEffectProcessor
         }
     }
 
-    public ID2D1Image Output => _output ?? _input ?? throw new InvalidOperationException("入力が未設定です。");
+    public ID2D1Image Output => (_identity ? _input : _output) ?? _input ?? throw new InvalidOperationException("入力が未設定です。");
 
     public void SetInput(ID2D1Image? input)
     {
@@ -131,11 +136,20 @@ internal sealed class SaDisplacedgeProcessor : IVideoEffectProcessor
         float time = (float)frame;
         if (time != _lastTime) { _flow.Time = time; _lastTime = time; }
 
-        float dispersion = (float)(_item.Dispersion.GetValue(frame, length, fps) / 100.0);
+        float dispersion = Math.Clamp((float)(_item.Dispersion.GetValue(frame, length, fps) / 100.0), 0f, 8f);
         if (dispersion != _lastDispersion) { _flow.Dispersion = dispersion; _lastDispersion = dispersion; }
 
         float dispersionSteps = (float)_item.DispersionSteps.GetValue(frame, length, fps);
         if (dispersionSteps != _lastDispersionSteps) { _flow.DispersionSteps = dispersionSteps; _lastDispersionSteps = dispersionSteps; }
+
+        float warpRed = (float)(_item.WarpRed.GetValue(frame, length, fps) / 100.0);
+        if (warpRed != _lastWarpRed) { _flow.WarpRed = warpRed; _lastWarpRed = warpRed; }
+
+        float warpBlue = (float)(_item.WarpBlue.GetValue(frame, length, fps) / 100.0);
+        if (warpBlue != _lastWarpBlue) { _flow.WarpBlue = warpBlue; _lastWarpBlue = warpBlue; }
+
+        float warpRotation = (float)_item.WarpRotation.GetValue(frame, length, fps);
+        if (warpRotation != _lastWarpRotation) { _flow.WarpRotation = warpRotation; _lastWarpRotation = warpRotation; }
 
         float iridescence = (float)(_item.Iridescence.GetValue(frame, length, fps) / 100.0);
         if (iridescence != _lastIridescence) { _flow.Iridescence = iridescence; _lastIridescence = iridescence; }
@@ -157,6 +171,13 @@ internal sealed class SaDisplacedgeProcessor : IVideoEffectProcessor
 
         float outputMode = (float)_item.OutputMode;
         if (outputMode != _lastOutputMode) { _flow.OutputMode = outputMode; _lastOutputMode = outputMode; }
+
+        float samplingQuality = (float)_item.SamplingQuality;
+        if (samplingQuality != _lastSamplingQuality) { _flow.FastSampling = samplingQuality; _lastSamplingQuality = samplingQuality; }
+        // Preserve the existing dispersion=0 behaviour. This bypass avoids
+        // evaluating the entire graph when the composite is exactly unchanged.
+        _identity = outputMode < .5f && iridescence <= 1e-5f &&
+            (strength <= 0f || dispersion <= 1e-5f);
 
         return effectDescription.DrawDescription;
     }

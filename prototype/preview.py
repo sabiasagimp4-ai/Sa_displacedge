@@ -30,6 +30,7 @@ import argparse
 import math
 from dataclasses import dataclass
 from pathlib import Path
+from functools import lru_cache
 
 import numpy as np
 from PIL import Image
@@ -80,14 +81,29 @@ def scharr_gradient(luma: np.ndarray, step: float) -> tuple[np.ndarray, np.ndarr
     # shader. The old implementation rounded this value to an integer, which
     # made the lower half of the UI range visually identical.
     step = max(0.25, float(step))
+    # These taps are uniformly translated grids, not arbitrary coordinates.
+    # Interpolate along each axis using 1-D indices instead of allocating
+    # eight full-frame coordinate/index/weight grids.
     h, w = luma.shape
-    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
     gx = np.zeros_like(luma, dtype=np.result_type(luma, np.float32))
     gy = np.zeros_like(luma, dtype=np.result_type(luma, np.float32))
+    horizontal = []
+    for dx in (-step, 0.0, step):
+        # Form coordinates in float32, like the previous mgrid reference.
+        # Fractions may vary slightly per pixel due to float32 rounding.
+        x = np.arange(w, dtype=np.float32) + dx
+        lo = np.floor(x).astype(np.int32)
+        f = x - lo
+        horizontal.append(luma[:, np.clip(lo, 0, w-1)] * (1-f) +
+                          luma[:, np.clip(lo+1, 0, w-1)] * f)
     for j in range(3):
+        y = np.arange(h, dtype=np.float32) + (j-1)*step
+        lo = np.floor(y).astype(np.int32)
+        f = (y-lo)[:, None]
+        y0, y1 = np.clip(lo, 0, h-1), np.clip(lo+1, 0, h-1)
         for i in range(3):
             if _SCHARR_X[j, i] != 0 or _SCHARR_Y[j, i] != 0:
-                tap = _sample_scalar(luma, xx + (i - 1) * step, yy + (j - 1) * step)
+                tap = horizontal[i][y0] * (1-f) + horizontal[i][y1] * f
                 gx += _SCHARR_X[j, i] * tap
                 gy += _SCHARR_Y[j, i] * tap
     return gx, gy
@@ -109,8 +125,12 @@ def _box_blur_axis(arr: np.ndarray, radius: float, axis: int) -> np.ndarray:
     zero_shape[axis] = 1
     csum = np.concatenate([np.zeros(zero_shape, dtype=csum.dtype), csum], axis=axis)
     n = arr.shape[axis]
-    hi = np.take(csum, np.arange(2 * r + 1, 2 * r + 1 + n), axis=axis)
-    lo = np.take(csum, np.arange(0, n), axis=axis)
+    # Views replace np.take's full-size copies of both cumulative sums.
+    hi_slice = [slice(None)] * arr.ndim
+    lo_slice = [slice(None)] * arr.ndim
+    hi_slice[axis] = slice(2*r+1, 2*r+1+n)
+    lo_slice[axis] = slice(0, n)
+    hi, lo = csum[tuple(hi_slice)], csum[tuple(lo_slice)]
     return (hi - lo) / (2 * r + 1)
 
 
@@ -183,10 +203,8 @@ def fbm_gradient(p: np.ndarray, octaves: int) -> np.ndarray:
     """Gradient of the rotated-octave fBm with respect to its input p."""
     grad = np.zeros_like(p, dtype=np.result_type(p, np.float32))
     pp = p
-    axis_x = np.zeros_like(p, dtype=grad.dtype)
-    axis_y = np.zeros_like(p, dtype=grad.dtype)
-    axis_x[..., 0] = 1.0
-    axis_y[..., 1] = 1.0
+    axis_x = np.array([1.0, 0.0], dtype=grad.dtype)
+    axis_y = np.array([0.0, 1.0], dtype=grad.dtype)
     amp, freq = 0.5, 1.0
     for _ in range(max(1, min(8, int(octaves)))):
         grad_q = _value_noise_gradient(pp * freq) * freq
@@ -227,6 +245,21 @@ def bilinear_sample(img: np.ndarray, x: np.ndarray, y: np.ndarray) -> np.ndarray
     return top * (1 - wy) + bot * wy
 
 
+def reflect_bilinear_sample(img: np.ndarray, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """Bilinear sample with the reflected border used by S_DistortChroma."""
+    h, w = img.shape[:2]
+
+    def reflect(coord: np.ndarray, extent: int) -> np.ndarray:
+        if extent <= 1:
+            return np.zeros_like(coord)
+        span = float(extent - 1)
+        period = 2.0 * span
+        folded = np.mod(coord, period)
+        return np.minimum(folded, period - folded)
+
+    return bilinear_sample(img, reflect(x, w), reflect(y, h))
+
+
 def iridescent_palette(t: np.ndarray) -> np.ndarray:
     freq = np.array([1.0, 1.0, 1.0])
     phase = np.array([0.0, 0.33, 0.67])
@@ -247,6 +280,34 @@ def spectrum_weight(t: float) -> np.ndarray:
     return np.array([_gauss(t, 0.85, 0.35), _gauss(t, 0.5, 0.35), _gauss(t, 0.15, 0.35)])
 
 
+@lru_cache(maxsize=252)
+def spectral_table(steps: int, fast: bool = False) -> np.ndarray:
+    """Normalized RGB weights + signed positions; mirrors SpectralTable.cs.
+
+    Fast mode linearly redistributes the original weights to at most eight
+    nodes. It preserves each channel's zeroth and first moments, but can
+    alias sharp/high-frequency content between those nodes.
+    """
+    steps = max(3, min(128, int(steps)))
+    count = min(steps, 8) if fast else steps
+    result = np.zeros((count, 4), dtype=np.float64)
+    total = np.zeros(3)
+    for i in range(steps):
+        t = i / (steps - 1)
+        w = spectrum_weight(t)
+        total += w
+        node = t * (count - 1)
+        lo = min(int(node), count - 1) if fast else i
+        hi = min(lo + 1, count - 1) if fast else i
+        f = node - lo if fast else 0.0
+        result[lo, :3] += w * (1 - f)
+        result[hi, :3] += w * f
+    result[:, :3] /= total
+    result[:, 3] = np.linspace(-1, 1, count)
+    result.setflags(write=False)
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Parameters (mirrors the animatable UI exposed by SaDisplacedgeEffect.cs)
 # ---------------------------------------------------------------------------
@@ -262,8 +323,12 @@ class Params:
     turbulence_detail: int = 4        # fBm octaves
     noise_scale: float = 220.0        # px per noise unit (higher = larger swirls)
     flow_speed: float = 1.0           # animation rate multiplier
-    dispersion: float = 0.35          # 0-1, sweep spread around scale 1.0
+    dispersion: float = 0.35          # 0-8, chroma amount around the flow displacement
     dispersion_steps: int = 16        # >=3, taps swept across the spread; 3 == classic R/G/B split
+    warp_red: float = 0.5             # S_DistortChroma-style red-end warp ratio
+    warp_blue: float = 1.0            # S_DistortChroma-style blue-end warp ratio
+    warp_rotation_deg: float = 0.0    # rotate the lens-gradient chroma direction
+    fast_sampling: bool = False       # approximate maximum-eight-tap mode
     iridescence: float = 0.55         # 0-1, glint colour strength
     light_angle_deg: float = 55.0
     seed: float = 0.0
@@ -273,6 +338,8 @@ class Params:
 
 def render(src: np.ndarray, p: Params, output_mode: str = "composite") -> np.ndarray:
     """src: HxWx3 float32 in [0,1] straight sRGB. Returns HxWx3 float32 sRGB."""
+    if output_mode == "composite" and p.strength == 0 and p.iridescence == 0:
+        return src.copy()
     h, w = src.shape[:2]
     linear = srgb_to_linear(src)
     luma = oklab_l(linear)
@@ -295,7 +362,16 @@ def render(src: np.ndarray, p: Params, output_mode: str = "composite") -> np.nda
         gray = mask
         return np.stack([gray, gray, gray], axis=-1)
 
-    inv_mag = np.where(mag_b > 1e-6, 1.0 / mag_b, 0.0)
+    active = mask > 0
+    if not active.any():
+        if output_mode == "flow":
+            result = np.zeros_like(src)
+            result[..., :2] = .5
+            return result
+        return src.copy()
+
+    inv_mag = np.zeros_like(mag_b)
+    np.divide(1.0, mag_b, out=inv_mag, where=mag_b > 1e-6)
     edge_normal = np.stack([gx_b * inv_mag, gy_b * inv_mag], axis=-1)
 
     # phase_offset is added in the same units as time*flow_speed, *before*
@@ -311,8 +387,11 @@ def render(src: np.ndarray, p: Params, output_mode: str = "composite") -> np.nda
     turb = np.clip(p.turbulence, 0.0, 1.0)
     irid = np.clip(p.iridescence, 0.0, 1.0)
     curl = np.zeros_like(coord)
-    if turb > 1e-5 or irid > 1e-5:
-        curl = curl_noise(coord, p.turbulence_detail)
+    if turb > 1e-5 or (output_mode == "composite" and irid > 1e-5):
+        if active.all():
+            curl = curl_noise(coord, p.turbulence_detail)
+        elif active.any():
+            curl[active] = curl_noise(coord[active], p.turbulence_detail)
     curl_len = np.hypot(curl[..., 0], curl[..., 1])
     curl_norm = curl / np.maximum(1e-6, curl_len)[..., None]
     curl_norm[curl_len <= 1e-5] = np.array([1.0, 0.0], dtype=curl_norm.dtype)
@@ -322,6 +401,14 @@ def render(src: np.ndarray, p: Params, output_mode: str = "composite") -> np.nda
     flow = flow / flow_len[..., None]
 
     disp = flow * (p.strength * mask)[..., None]
+    angle = math.radians(p.warp_rotation_deg)
+    cos_a, sin_a = math.cos(angle), math.sin(angle)
+    chroma_direction = np.stack([
+        edge_normal[..., 0] * cos_a - edge_normal[..., 1] * sin_a,
+        edge_normal[..., 0] * sin_a + edge_normal[..., 1] * cos_a,
+    ], axis=-1)
+    chroma_disp = chroma_direction * (p.strength * mask)[..., None]
+    base_position = np.stack([xx, yy], axis=-1) + disp
 
     if output_mode == "flow":
         vis = np.stack([
@@ -331,27 +418,35 @@ def render(src: np.ndarray, p: Params, output_mode: str = "composite") -> np.nda
         ], axis=-1)
         return np.clip(vis, 0, 1)
 
-    if p.strength == 0.0 and p.iridescence == 0.0:
-        return src.copy()
+    # The composite no longer needs these full-frame intermediates. Drop
+    # them before spectral gathers allocate their temporary RGB buffers.
+    del coord, curl_len, curl_norm, flow, flow_len, gx_b, gy_b, inv_mag, luma
 
-    # Sweep dispersion_steps taps from scale (1-dispersion) to (1+dispersion)
-    # along the displacement vector, each weighted by an approximate
-    # spectral response, and blend them into a smoothly graded prism
-    # fringe. steps=3 reduces to the classic R/G/B split; more steps trade
-    # compute for a smoother, more continuous spectrum.
-    steps = max(3, int(round(p.dispersion_steps)))
-    color_sum = np.zeros(src.shape[:2] + (3,), dtype=src.dtype)
-    weight_sum = np.zeros(3, dtype=src.dtype)
-    for s in range(steps):
-        t = s / (steps - 1)
-        scale = 1.0 + np.clip(p.dispersion, 0.0, 1.0) * (2.0 * t - 1.0)
-        sx = xx + disp[..., 0] * scale
-        sy = yy + disp[..., 1] * scale
-        tap = bilinear_sample(src, sx, sy)
-        w = spectrum_weight(t).astype(src.dtype, copy=False)
-        color_sum += tap * w
-        weight_sum += w
-    out = color_sum / np.maximum(weight_sum, 1e-5)
+    # S_DistortChroma-style sweep: the flow gives the base displacement and
+    # the blurred edge gradient gives an independent chroma direction. Red
+    # and blue receive signed end-point warp ratios; the middle stays at the
+    # base position. Reflected borders avoid a flat smear at high gains.
+    table = spectral_table(int(round(p.dispersion_steps)), p.fast_sampling)
+    dense = active.all()
+    if dense:
+        sample_x, sample_y = xx, yy
+        base, chroma = base_position, chroma_disp
+        color_sum = np.zeros_like(src)
+    else:
+        sample_x, sample_y = xx[active], yy[active]
+        base, chroma = base_position[active], chroma_disp[active]
+        color_sum = np.zeros((np.count_nonzero(active), 3), dtype=src.dtype)
+    for row in table:
+        t = np.clip(0.5 + 0.5 * row[3], 0.0, 1.0)
+        signed_warp = (1.0 - t) * (-p.warp_blue) + t * p.warp_red
+        sample = base + chroma * (np.clip(p.dispersion, 0.0, 8.0) * signed_warp)[..., None]
+        tap = reflect_bilinear_sample(src, sample[..., 0], sample[..., 1])
+        color_sum += tap * row[:3]
+    if dense:
+        out = color_sum
+    else:
+        out = src.copy()
+        out[active] = color_sum
 
     light = np.array([math.cos(math.radians(p.light_angle_deg)), math.sin(math.radians(p.light_angle_deg))], dtype=src.dtype)
     ndotl = edge_normal[..., 0] * light[0] + edge_normal[..., 1] * light[1]
@@ -385,6 +480,10 @@ def main() -> None:
     ap.add_argument("--radius", type=float, default=Params.radius)
     ap.add_argument("--dispersion", type=float, default=Params.dispersion)
     ap.add_argument("--dispersion-steps", type=int, default=Params.dispersion_steps)
+    ap.add_argument("--warp-red", type=float, default=Params.warp_red)
+    ap.add_argument("--warp-blue", type=float, default=Params.warp_blue)
+    ap.add_argument("--warp-rotation", type=float, default=Params.warp_rotation_deg)
+    ap.add_argument("--fast-sampling", action="store_true")
     ap.add_argument("--iridescence", type=float, default=Params.iridescence)
     ap.add_argument("--seed", type=float, default=Params.seed)
     ap.add_argument("--time", type=float, default=Params.time)
@@ -395,8 +494,10 @@ def main() -> None:
     params = Params(
         strength=args.strength, turbulence=args.turbulence, radius=args.radius,
         dispersion=args.dispersion, dispersion_steps=args.dispersion_steps,
+        warp_red=args.warp_red, warp_blue=args.warp_blue,
+        warp_rotation_deg=args.warp_rotation,
         iridescence=args.iridescence, seed=args.seed, time=args.time,
-        phase_offset=args.phase_offset,
+        phase_offset=args.phase_offset, fast_sampling=args.fast_sampling,
     )
     out = render(src, params, output_mode=args.mode)
     save_image(out, args.output)

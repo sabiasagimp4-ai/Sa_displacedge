@@ -139,3 +139,15 @@ float3 SpectrumWeight(float t)
 {
     return float3(Gauss(t, .85, .35), Gauss(t, .5, .35), Gauss(t, .15, .35));
 }
+
+// S_DistortChroma defaults to reflected borders. Reflecting the high-gain
+// chroma taps keeps a large warp from collapsing into a flat edge smear.
+float2 ReflectSamplePosition(float2 samplePosition, float4 bounds)
+{
+    float2 extent = max(bounds.zw - bounds.xy - 1.0, 1.0);
+    float2 period = extent * 2.0;
+    float2 q = samplePosition - bounds.xy;
+    q -= period * floor(q / period);
+    q = min(q, period - q);
+    return bounds.xy + clamp(q, 0.0, extent);
+}
