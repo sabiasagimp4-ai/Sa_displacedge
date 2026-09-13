@@ -1,3 +1,4 @@
+#define D2D_REQUIRES_SCENE_POSITION
 // Pass 2/2: the creative core. Input0 is the original source (swept along
 // the displacement at dispersionSteps offsets for a spectral prism fringe);
 // Input1 is the blurred edge field from EdgeGradient.hlsl (recovered here

@@ -15,7 +15,7 @@ foreach ($name in @('EdgeGradient', 'FlowDisplace')) {
                 @('flowSpeed', 16), @('time', 20), @('dispersion', 24), @('iridescence', 28),
                 @('lightAngle', 32), @('seed', 36), @('threshold', 40), @('contrast', 44),
                 @('outputMode', 48), @('dispersionSteps', 52), @('phaseOffset', 56), @('tapCount', 60), @('inputBounds', 64),
-                @('lightAndMask', 80), @('spectralTaps\[128\]', 96)
+                @('lightAndMask', 80), @('spectralTaps\[128\]', 96), @('chromaControls', 2144)
             )
         }
     }

@@ -1,3 +1,4 @@
+#define D2D_REQUIRES_SCENE_POSITION
 // Pass 1/2: Scharr gradient of OKLab L at an adjustable tap spacing
 // (detectionScale), weight-carried by alpha as (gx*a, gy*a, mag*a, a).
 // D2D's built-in GaussianBlur (applied to this pass's output by

@@ -338,7 +338,7 @@ class Params:
 
 def render(src: np.ndarray, p: Params, output_mode: str = "composite") -> np.ndarray:
     """src: HxWx3 float32 in [0,1] straight sRGB. Returns HxWx3 float32 sRGB."""
-    if output_mode == "composite" and p.strength == 0 and p.iridescence == 0:
+    if output_mode == "composite" and (p.strength <= 0 or p.dispersion <= 1e-5) and p.iridescence <= 1e-5:
         return src.copy()
     h, w = src.shape[:2]
     linear = srgb_to_linear(src)
@@ -426,27 +426,30 @@ def render(src: np.ndarray, p: Params, output_mode: str = "composite") -> np.nda
     # the blurred edge gradient gives an independent chroma direction. Red
     # and blue receive signed end-point warp ratios; the middle stays at the
     # base position. Reflected borders avoid a flat smear at high gains.
-    table = spectral_table(int(round(p.dispersion_steps)), p.fast_sampling)
-    dense = active.all()
-    if dense:
-        sample_x, sample_y = xx, yy
-        base, chroma = base_position, chroma_disp
-        color_sum = np.zeros_like(src)
-    else:
-        sample_x, sample_y = xx[active], yy[active]
-        base, chroma = base_position[active], chroma_disp[active]
-        color_sum = np.zeros((np.count_nonzero(active), 3), dtype=src.dtype)
-    for row in table:
-        t = np.clip(0.5 + 0.5 * row[3], 0.0, 1.0)
-        signed_warp = (1.0 - t) * (-p.warp_blue) + t * p.warp_red
-        sample = base + chroma * (np.clip(p.dispersion, 0.0, 8.0) * signed_warp)[..., None]
-        tap = reflect_bilinear_sample(src, sample[..., 0], sample[..., 1])
-        color_sum += tap * row[:3]
-    if dense:
-        out = color_sum
-    else:
+    if p.dispersion <= 1e-5 or p.strength <= 0:
         out = src.copy()
-        out[active] = color_sum
+    else:
+        table = spectral_table(int(round(p.dispersion_steps)), p.fast_sampling)
+        dense = active.all()
+        if dense:
+            sample_x, sample_y = xx, yy
+            base, chroma = base_position, chroma_disp
+            color_sum = np.zeros_like(src)
+        else:
+            sample_x, sample_y = xx[active], yy[active]
+            base, chroma = base_position[active], chroma_disp[active]
+            color_sum = np.zeros((np.count_nonzero(active), 3), dtype=src.dtype)
+        for row in table:
+            t = np.clip(0.5 + 0.5 * row[3], 0.0, 1.0)
+            signed_warp = (1.0 - t) * (-p.warp_blue) + t * p.warp_red
+            sample = base + chroma * (np.clip(p.dispersion, 0.0, 8.0) * signed_warp)[..., None]
+            tap = reflect_bilinear_sample(src, sample[..., 0], sample[..., 1])
+            color_sum += tap * row[:3]
+        if dense:
+            out = color_sum
+        else:
+            out = src.copy()
+            out[active] = color_sum
 
     light = np.array([math.cos(math.radians(p.light_angle_deg)), math.sin(math.radians(p.light_angle_deg))], dtype=src.dtype)
     ndotl = edge_normal[..., 0] * light[0] + edge_normal[..., 1] * light[1]

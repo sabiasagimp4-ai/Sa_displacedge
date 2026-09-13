@@ -132,9 +132,11 @@ internal sealed class FlowDisplaceEffect(IGraphicsDevicesAndContext devices)
             bool displaces = _constants.OutputMode < .5f && _constants.Dispersion > 1e-5f && _constants.Strength > 0f;
             float chromaWarp = MathF.Max(MathF.Abs(_constants.WarpRed), MathF.Abs(_constants.WarpBlue));
             int halo = displaces ? (int)MathF.Ceiling(_constants.Strength * (1f + _constants.Dispersion * chromaWarp)) + 1 : 0;
-            inputRects[0] = new(outputRect.Left - halo, outputRect.Top - halo, outputRect.Right + halo, outputRect.Bottom + halo);
+            inputRects[0] = new(Safe((long)outputRect.Left - halo), Safe((long)outputRect.Top - halo), Safe((long)outputRect.Right + halo), Safe((long)outputRect.Bottom + halo));
             inputRects[1] = outputRect;
         }
+
+        private static int Safe(long value) => (int)Math.Clamp(value, int.MinValue, int.MaxValue);
 
         [StructLayout(LayoutKind.Sequential)]
         private struct Constants
