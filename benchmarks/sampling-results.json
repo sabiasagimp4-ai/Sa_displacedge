@@ -1,0 +1,100 @@
+{
+  "scope": "full NumPy reference render; no GPU timing",
+  "resolution": [
+    512,
+    384
+  ],
+  "trials": 3,
+  "python": "3.12.14",
+  "numpy": "2.3.5",
+  "results": [
+    {
+      "pattern": "smooth",
+      "steps": 16,
+      "strength": 46,
+      "standard_seconds": 0.6025307599998087,
+      "fast_seconds": 0.39949891499963996,
+      "speedup": 1.5082162613641934,
+      "mae": 4.7936195939866454e-05,
+      "max_error": 0.0008972138166427612,
+      "psnr_db": 81.26540991307695
+    },
+    {
+      "pattern": "smooth",
+      "steps": 128,
+      "strength": 10,
+      "standard_seconds": 3.4822625779997907,
+      "fast_seconds": 0.40810258400006205,
+      "speedup": 8.5328118824145,
+      "mae": 2.1807707134434572e-06,
+      "max_error": 0.00021332502365112305,
+      "psnr_db": 106.05154588958592
+    },
+    {
+      "pattern": "smooth",
+      "steps": 128,
+      "strength": 46,
+      "standard_seconds": 3.997553847999825,
+      "fast_seconds": 0.4148025080003208,
+      "speedup": 9.637246089159936,
+      "mae": 4.902450357208038e-05,
+      "max_error": 0.0009395182132720947,
+      "psnr_db": 81.12075234874985
+    },
+    {
+      "pattern": "smooth",
+      "steps": 128,
+      "strength": 400,
+      "standard_seconds": 4.0391789720001725,
+      "fast_seconds": 0.41995537000002514,
+      "speedup": 9.618114829678046,
+      "mae": 0.001543957027601033,
+      "max_error": 0.0147666335105896,
+      "psnr_db": 51.978868192968484
+    },
+    {
+      "pattern": "checker",
+      "steps": 16,
+      "strength": 46,
+      "standard_seconds": 0.639573788999769,
+      "fast_seconds": 0.42134000400028526,
+      "speedup": 1.5179517323955216,
+      "mae": 0.04449921897397077,
+      "max_error": 0.2476731836795807,
+      "psnr_db": 24.77122133763838
+    },
+    {
+      "pattern": "checker",
+      "steps": 128,
+      "strength": 10,
+      "standard_seconds": 3.805544849999933,
+      "fast_seconds": 0.3855027439999503,
+      "speedup": 9.871641406527637,
+      "mae": 0.008609885115223821,
+      "max_error": 0.0391659140586853,
+      "psnr_db": 38.46180185034872
+    },
+    {
+      "pattern": "checker",
+      "steps": 128,
+      "strength": 46,
+      "standard_seconds": 3.717140524000115,
+      "fast_seconds": 0.39940688200022123,
+      "speedup": 9.306651165810548,
+      "mae": 0.04707773140854189,
+      "max_error": 0.26350593566894537,
+      "psnr_db": 24.221597759319717
+    },
+    {
+      "pattern": "checker",
+      "steps": 128,
+      "strength": 400,
+      "standard_seconds": 3.5986819770000693,
+      "fast_seconds": 0.4581257680001727,
+      "speedup": 7.855227163294409,
+      "mae": 0.09805687863506675,
+      "max_error": 0.5443703234195709,
+      "psnr_db": 16.35417151768716
+    }
+  ]
+}

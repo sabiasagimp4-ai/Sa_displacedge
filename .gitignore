@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+docs/pipeline_examples/
+.venv/
+ymm/**/bin/
+ymm/**/obj/
+benchmarks/*_outputs/
